@@ -1,0 +1,9 @@
+# 依赖、构建产物与本地缓存不进入版本管理。
+/node_modules/
+/out/
+/release/
+/.cache/
+
+# 本地日志与 TypeScript 增量构建信息。
+*.log
+*.tsbuildinfo
