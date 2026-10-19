@@ -1,4 +1,5 @@
 /** 文件用途：定义框架预览与有限进程通信的共享类型，不包含持久化业务。 */
+import type { AlbumApi } from './album';
 export type Orientation = 'portrait' | 'landscape';
 
 export interface PreviewPage {
@@ -19,7 +20,7 @@ export interface SamplePdfResult {
 }
 
 /** 只提供明确业务方法，不暴露通用 IPC 或文件系统能力。 */
-export interface DesktopApi {
+export interface DesktopApi extends AlbumApi {
   getAppInfo(): Promise<AppInfo>;
   exportSamplePdf(): Promise<SamplePdfResult>;
 }

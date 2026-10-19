@@ -6,6 +6,11 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { AppInfo, SamplePdfResult } from '../shared/framework';
 import { runFrameworkSmoke } from './smoke';
+import { AlbumController } from './album-ipc';
+import { declareImageProtocol, installImageProtocol } from './image-validator';
+import { runAlbumSmoke } from './album-smoke';
+
+declareImageProtocol();
 
 const smokeMode = !app.isPackaged && process.argv.includes('--framework-smoke');
 const projectRoot = join(__dirname, '../..');
@@ -110,12 +115,12 @@ async function chooseSamplePdf(): Promise<SamplePdfResult> {
   }
 }
 
-/** 安装原生菜单；工程业务尚未实现的命令保持禁用。 */
-function installMenu(): void {
+/** 安装原生菜单，画册入口与界面共用控制器，未实现的页面保存保持禁用。 */
+function installMenu(albums: AlbumController): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: '文件', submenu: [
-      { label: '新建画册', enabled: false },
-      { label: '打开画册', enabled: false },
+      { id: 'create-album', label: '新建画册…', click: () => { void albums.chooseAlbum(true); } },
+      { id: 'open-album', label: '打开画册…', click: () => { void albums.chooseAlbum(false); } },
       { label: '保存', enabled: false },
       { type: 'separator' },
       { label: '导出双页 A4 样例…', click: () => {
@@ -137,7 +142,7 @@ function installMenu(): void {
   ]));
 }
 
-/** 框架阶段只注册版本查询与样例导出，后续按业务逐项扩展接口。 */
+/** 注册受限桌面与画册接口，后台图片校验使用独立资源协议。 */
 async function bootstrap(): Promise<void> {
   if (!app.isPackaged) {
     const profile = join(projectRoot, '.cache', smokeMode ? 'smoke-profile' : 'dev-profile');
@@ -145,6 +150,7 @@ async function bootstrap(): Promise<void> {
     app.setPath('userData', profile);
   }
   await app.whenReady();
+  installImageProtocol();
   ipcMain.handle('framework:app-info', (event): AppInfo => {
     assertMainSender(event);
     return { version: app.getVersion(), electron: process.versions.electron,
@@ -154,12 +160,18 @@ async function bootstrap(): Promise<void> {
     assertMainSender(event);
     return chooseSamplePdf();
   });
-  installMenu();
+  const albums = new AlbumController(() => {
+    if (!mainWindow) throw new Error('主窗口已关闭。');
+    return mainWindow;
+  }, assertMainSender);
+  albums.register();
+  installMenu(albums);
   mainWindow = createWindow(smokeMode);
   mainWindow.on('closed', () => { mainWindow = null; });
   await loadRenderer(mainWindow);
   if (smokeMode) {
     await runFrameworkSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), exportSamplePdf);
+    await runAlbumSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
     app.quit();
   }
 }

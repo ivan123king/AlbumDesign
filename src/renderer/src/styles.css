@@ -12,7 +12,7 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .brand-mark { width: 40px; height: 43px; display: grid; place-items: center; background: #667557; color: #fff; border-radius: 5px 12px 5px 5px; font: 24px "SimSun", serif; }
 .brand strong { display: block; font-size: 19px; letter-spacing: 2px; }
 .brand div > span { display: block; font-size: 10px; color: #909387; letter-spacing: 2px; margin-top: 5px; }
-.document-title { font-size: 13px; color: #676c61; }
+.document-title { font-size: 13px; color: #676c61; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-badge { font-size: 10px; background: #edf0e8; padding: 4px 7px; border-radius: 4px; margin-left: 10px; color: #78836a; }
 .primary-button { border: 1px solid #657552; background: #657552; color: white; padding: 10px 16px; border-radius: 5px; font-size: 12px; }
 .primary-button span { margin-right: 8px; font-size: 16px; }
@@ -30,12 +30,49 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .count-badge { color: #7d8672; font-size: 10px; background: #ecefe7; border-radius: 4px; padding: 2px 6px; }
 .panel-subtitle { color: #a0a397; font-size: 10px; margin: 8px 20px 22px; }
 .import-button { margin: 0 18px 22px; padding: 10px 4px; border: 1px dashed #cfd4c6; border-radius: 5px; background: #f6f7f1; font-size: 11px; }
-.assets-root { font-size: 12px; display: flex; align-items: center; gap: 9px; margin: 0 20px; padding: 10px 0; border-bottom: 1px solid #eceee7; }
+.assets-root { font: inherit; font-size: 12px; text-align: left; display: flex; align-items: center; gap: 9px; margin: 0 12px; padding: 4px 9px; border: 0; border-bottom: 1px solid #eceee7; background: transparent; border-radius: 4px; }
 .folder-symbol { font-size: 23px; color: #929b83; }
 .asset-empty { padding: 48px 10px; text-align: center; }
 .empty-symbol { font-size: 45px; color: #c6ccbe; margin-bottom: 15px; }
 .asset-empty strong { font-size: 12px; font-weight: 400; color: #8d9384; }
 .asset-empty p { color: #abb0a3; font-size: 11px; line-height: 1.9; }
+/* 素材列表独立滚动，不解码原图；长名称省略显示，完整路径保留在提示中。 */
+.assets-panel { overflow: hidden; }
+.assets-panel .panel-subtitle { margin-bottom: 15px; }
+.assets-panel .import-button { margin-bottom: 10px; flex-shrink: 0; }
+.assets-panel .panel-heading, .assets-panel .panel-footer, .assets-root { flex-shrink: 0; }
+.asset-actions { display: flex; justify-content: space-between; margin: 0 18px 12px; gap: 8px; }
+.asset-actions button { background: transparent; border: 1px solid #dce1d3; border-radius: 4px; padding: 5px 8px; font-size: 11px; }
+.assets-root.selected, .asset-directory.selected { background: #eaf0e1; color: #526541; }
+.asset-target { font-size: 10px; color: #7d8872; margin: 9px 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+.asset-scroll { flex: 1; min-height: 50px; overflow: auto; padding: 0 10px 12px; }
+.asset-tree { list-style: none; padding: 0; margin: 0; }
+.asset-tree .asset-tree { padding-left: 12px; }
+.asset-directory { display: flex; align-items: center; border-radius: 4px; min-width: 0; }
+.asset-directory button { border: 0; background: transparent; padding: 5px 2px; text-align: left; font-size: 11px; }
+.asset-toggle { width: 20px; flex-shrink: 0; }
+.asset-name { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+.asset-name > span:last-child, .asset-file > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-folder { color: #879777; font-size: 19px; flex-shrink: 0; }
+.asset-file { display: flex; gap: 7px; align-items: center; padding: 7px 4px 7px 23px; font-size: 11px; color: #767f6d; }
+.asset-file > span:first-child { flex-shrink: 0; color: #9ba68f; }
+.asset-folder-empty { color: #a0a694; padding: 0 24px; font-size: 10px; }
+.import-progress { margin: 6px 18px 12px; font-size: 10px; color: #6d7e5a; }
+.import-progress progress { width: 100%; height: 6px; accent-color: #657552; }
+.import-progress span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding-top: 4px; }
+.asset-notice, .import-report { margin: 0 12px 10px; padding: 9px; background: #f0f2ea; border-radius: 4px; font-size: 10px; color: #6c785f; max-height: 150px; overflow: auto; flex-shrink: 0; overflow-wrap: anywhere; }
+.asset-notice summary, .import-report summary { cursor: pointer; }
+.asset-notice ul, .import-report ul { padding-left: 14px; line-height: 1.8; }
+.import-failure { color: #9c513b; }
+/* 原生 dialog 提供模态焦点管理，名称输入与操作提示使用中文。 */
+.group-dialog { border: 1px solid #d4dbca; border-radius: 9px; padding: 24px; width: min(390px, 90vw); background: #fcfcf9; color: #45533a; box-shadow: 0 18px 70px #27351b30; }
+.group-dialog::backdrop { background: #26321f48; }
+.group-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+.group-dialog p { font-size: 12px; color: #859178; overflow-wrap: anywhere; }
+.group-dialog label { display: block; font-size: 12px; margin: 18px 0 8px; }
+.group-dialog input { width: 100%; padding: 10px; border: 1px solid #bdc9ac; border-radius: 4px; font: inherit; font-size: 13px; background: #fff; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.dialog-actions button { padding: 8px 16px; border: 1px solid #bdc9ac; border-radius: 4px; font-size: 12px; }
 .panel-footer { margin-top: auto; padding: 18px 12px; text-align: center; font-size: 9px; color: #9ca292; border-top: 1px solid #eceee6; }
 .panel-divider { background: #e6e8df; cursor: col-resize; touch-action: none; }
 .panel-divider:hover { background: #a9b49c; }
@@ -107,4 +144,14 @@ button:not(:disabled):hover { filter: brightness(.97); }
   .toolbar-note { display: none; }
   .canvas-toolbar { padding: 0 12px; }
   .canvas-toolbar div > span { display: none; }
+}
+/* 较矮窗口为素材树保留可用高度，导入明细在自身区域内滚动。 */
+@media (max-height: 760px) {
+  .assets-panel .panel-heading { padding-top: 14px; }
+  .assets-panel .panel-subtitle { margin-bottom: 10px; }
+  .assets-panel .import-button { padding: 8px 4px; }
+  .asset-actions { margin-bottom: 6px; }
+  .asset-scroll { min-height: 100px; }
+  .asset-notice, .import-report { max-height: 100px; margin-bottom: 6px; padding: 7px; }
+  .assets-panel .panel-footer { padding: 10px 6px; }
 }

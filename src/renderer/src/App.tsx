@@ -1,15 +1,17 @@
-/** 文件用途：组装三栏框架，提供 A4 样例切换、查看缩放、面板调整和样例 PDF 导出。 */
+/** 文件用途：组装画册素材管理和三栏框架，保留 A4 样例预览及独立样例导出。 */
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { getPageSize, previewPages } from '../../shared/framework';
 import type { AppInfo, Orientation } from '../../shared/framework';
 import { PagePreview } from './components/PagePreview';
 import { PanelDivider } from './components/PanelDivider';
+import { AssetsPanel } from './components/AssetsPanel';
+import type { AlbumState } from '../../shared/album';
 
 const mmToPixels = 96 / 25.4;
-const unavailable = '画册管理功能将在下一阶段接入';
+const unavailable = '页面管理与排版保存将在后续阶段接入';
 
-/** 界面状态仅用于框架预览；不伪装成已创建或已保存的工程。 */
+/** 素材使用真实画册状态；中间与右侧仍明确标注为固定方向样例。 */
 export function App(): React.JSX.Element {
   const [orientation, setOrientation] = useState<Orientation>('portrait');
   const [zoom, setZoom] = useState(0.65);
@@ -18,6 +20,9 @@ export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [message, setMessage] = useState('框架预览，尚未打开画册');
   const [exporting, setExporting] = useState(false);
+  const [albumState, setAlbumState] = useState<AlbumState>({ revision: -1, album: null, busy: false, progress: null });
+  const [albumReady, setAlbumReady] = useState(false);
+  const [choosingAlbum, setChoosingAlbum] = useState(false);
   const workspace = useRef<HTMLDivElement>(null);
   const page = previewPages.find(item => item.orientation === orientation)!;
   const size = getPageSize(orientation);
@@ -29,6 +34,34 @@ export function App(): React.JSX.Element {
       .catch(() => { if (!disposed) setMessage('桌面接口连接失败，请通过桌面程序启动。'); });
     return () => { disposed = true; };
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    /** 状态事件可能先于初始化响应返回，按版本号接收，避免覆盖已打开的画册。 */
+    const receive = (state: AlbumState): void => {
+      if (!disposed) {
+        setAlbumState(previous => state.revision >= previous.revision ? state : previous);
+        setAlbumReady(true);
+      }
+    };
+    const unsubscribe = window.desktop.onAlbumState(receive);
+    void window.desktop.getAlbumState().then(receive).catch(() => {
+      if (!disposed) setMessage('画册接口连接失败，请重新启动桌面程序。');
+    });
+    return () => { disposed = true; unsubscribe(); };
+  }, []);
+
+  /** 新建与打开共用主进程原生目录选择；素材操作即时落盘，无页面保存伪状态。 */
+  async function chooseAlbum(create: boolean): Promise<void> {
+    if (choosingAlbum || albumState.busy) return;
+    setChoosingAlbum(true);
+    try {
+      const result = await (create ? window.desktop.createAlbum() : window.desktop.openAlbum());
+      setMessage(result.status === 'success' ? '画册已就绪，可在左侧导入素材；中央与右侧仍为方向样例。'
+        : result.status === 'canceled' ? `已取消${create ? '新建' : '打开'}画册` : result.message);
+    } catch { setMessage('桌面接口连接失败，请重试。'); }
+    finally { setChoosingAlbum(false); }
+  }
 
   useEffect(() => {
     const element = workspace.current;
@@ -68,7 +101,7 @@ export function App(): React.JSX.Element {
   return <div className="app-shell" style={layoutStyle} data-app-ready={info ? 'true' : undefined}>
     <header className="app-header">
       <div className="brand"><span className="brand-mark">册</span><div><strong>画册工坊</strong><span>留住每一页记忆</span></div></div>
-      <div className="document-title">未命名画册 <span className="preview-badge">框架预览</span></div>
+      <div className="document-title">{albumState.album?.name ?? '尚未打开画册'} <span className="preview-badge">{albumState.album ? '素材管理' : '框架预览'}</span></div>
       <button className="primary-button" onClick={() => { void exportPdf(); }} disabled={exporting}>
         <span aria-hidden="true">↗</span> {exporting ? '正在导出…' : '导出样例 PDF'}
       </button>
@@ -76,8 +109,8 @@ export function App(): React.JSX.Element {
 
     <nav className="toolbar" aria-label="画册工具">
       <div className="toolbar-group">
-        <button disabled title={unavailable} data-new-project>＋ 新建画册</button>
-        <button disabled title={unavailable}>打开画册</button>
+        <button disabled={!albumReady || albumState.busy || choosingAlbum} data-new-project onClick={() => { void chooseAlbum(true); }}>＋ 新建画册</button>
+        <button disabled={!albumReady || albumState.busy || choosingAlbum} onClick={() => { void chooseAlbum(false); }}>打开画册</button>
         <button disabled title={unavailable}>保存</button>
       </div>
       <span className="toolbar-divider" />
@@ -90,19 +123,12 @@ export function App(): React.JSX.Element {
     </nav>
 
     <main className="editor-layout">
-      <aside className="side-panel assets-panel" data-left-panel aria-label="图片素材">
-        <div className="panel-heading"><h2>图片素材</h2><span className="count-badge">0</span></div>
-        <div className="panel-subtitle">让故事从一张照片开始</div>
-        <button className="import-button" disabled title={unavailable}>＋ 导入图片</button>
-        <div className="assets-root"><span aria-hidden="true">▾</span><span className="folder-symbol" aria-hidden="true">▱</span>素材库</div>
-        <div className="asset-empty"><div className="empty-symbol" aria-hidden="true">▧</div><strong>这里还没有图片</strong><p>新建或打开画册后，<br />在这里管理你的素材。</p></div>
-        <div className="panel-footer">素材将保存在画册的 assets 目录</div>
-      </aside>
+      <AssetsPanel state={albumState} onMessage={setMessage} />
 
       <PanelDivider side="left" width={leftWidth} onChange={setLeftWidth} />
 
       <section className="canvas-panel" aria-label="画布预览">
-        <div className="canvas-toolbar"><div><strong>A4 画布</strong><span>{size.width} × {size.height} mm</span></div>
+        <div className="canvas-toolbar"><div><strong>A4 样例预览</strong><span>{size.width} × {size.height} mm</span></div>
           <div className="segmented" aria-label="页面方向">
             <button aria-pressed={orientation === 'portrait'} onClick={() => setOrientation('portrait')}>竖版</button>
             <button aria-pressed={orientation === 'landscape'} onClick={() => setOrientation('landscape')}>横版</button>
@@ -117,7 +143,7 @@ export function App(): React.JSX.Element {
             <div className="canvas-hint">滚轮缩放查看比例，纸张尺寸保持不变</div>
           </div>
         </div>
-        <div className="canvas-bottom"><span>页面预览</span><div className="zoom-controls">
+        <div className="canvas-bottom"><span>固定样例 · 尚未接入画册页面</span><div className="zoom-controls">
           <button aria-label="缩小画布" onClick={() => setZoom(value => Math.max(0.2, value - 0.1))}>−</button>
           <output data-zoom-value={zoom}>{Math.round(zoom * 100)}%</output>
           <button aria-label="放大画布" data-zoom-in onClick={() => setZoom(value => Math.min(2, value + 0.1))}>＋</button>

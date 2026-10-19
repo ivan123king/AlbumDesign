@@ -42,7 +42,7 @@ export async function runFrameworkSmoke(
     divider.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}));
     await wait();
     check(document.querySelector('[data-left-panel]').getBoundingClientRect().width > originalWidth, '侧栏宽度调整失败');
-    check(document.querySelector('[data-new-project]').disabled, '未实现操作未禁用');
+    check(!document.querySelector('[data-new-project]').disabled, '新建画册入口未启用');
     document.querySelector('[data-fit-page]').click();
     await wait();
     const pageBounds = paper().getBoundingClientRect();
