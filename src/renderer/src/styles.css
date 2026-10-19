@@ -281,6 +281,13 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .paper.landscape .paper-vertical { top: 47mm; right: 17mm; height: 105mm; }
 /* 所有 PDF 页均为竖向 A4；横版内容整体旋转，图片、文字和物理尺寸一起保留。 */
 .print-view { background: #fff; }
+/* 导出进度占独立一行；主界面操作沿用画册忙碌锁，取消按钮保持可用。 */
+.pdf-progress { display: flex; align-items: center; gap: 16px; padding: 9px 24px; background: #edf2e8; color: #405d2f; font-size: 13px; }
+.pdf-progress progress { flex: 1; height: 8px; accent-color: #54753c; }
+.pdf-progress button { padding: 5px 12px; border: 1px solid #bdc9ac; border-radius: 5px; background: white; color: inherit; cursor: pointer; }
+.pdf-progress button:disabled { opacity: .5; cursor: default; }
+/* 正式页直接使用基础坐标，不套用样例横版旋转，也不绘制空画布编辑提示。 */
+.album-print .print-sheet { background: white; isolation: isolate; }
 .print-sheet { position: relative; width: 210mm; height: 297mm; overflow: hidden; break-after: page; }
 .print-sheet:last-child { break-after: auto; }
 .print-sheet > .paper { position: absolute; top: 0; left: 0; }

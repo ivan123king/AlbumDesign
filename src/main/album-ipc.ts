@@ -12,6 +12,8 @@ import { getTextFonts } from './text-fonts';
 import type { AppDataStore } from './app-data';
 import type { AppDialogs } from './app-dialogs';
 import type { AlbumResult, AlbumSnapshot, AlbumState, AssetEntry, ImportReport } from '../shared/album';
+import { PdfExport } from './pdf-export';
+import { pdfFileName } from '../shared/pdf';
 
 /** 主菜单与 preload 共用控制器，避免并行导入和切换画册造成错写。 */
 export class AlbumController {
@@ -20,6 +22,8 @@ export class AlbumController {
   private assetImages = new AssetImages(() => this.store);
   private state: AlbumState = { revision: 0, album: null, busy: false, progress: null, canvas: null };
   private initialized = false;
+  private pdf: PdfExport | null = null;
+  private pdfWindows: { create: () => BrowserWindow; load: (window: BrowserWindow) => Promise<void> } | null = null;
 
   constructor(private readonly getWindow: () => BrowserWindow,
     private readonly assertSender: (event: IpcMainInvokeEvent) => void,
@@ -37,11 +41,13 @@ export class AlbumController {
   /** 业务忙碌或自定义模态打开时禁用其他菜单入口，保存仍要求当前画布有草稿。 */
   updateMenu(): void {
     const locked = this.state.busy || this.dialogs.isOpen;
-    for (const id of ['create-album', 'open-album', 'export-sample', 'about-app']) {
+    for (const id of ['create-album', 'open-album', 'about-app']) {
       const item = Menu.getApplicationMenu()?.getMenuItemById(id);
       if (item) item.enabled = !locked;
     }
     const save = Menu.getApplicationMenu()?.getMenuItemById('save-page');
+    const exportItem = Menu.getApplicationMenu()?.getMenuItemById('export-pdf');
+    if (exportItem) exportItem.enabled = !locked && !!this.state.album?.pages.length;
     if (save) save.enabled = !locked && !!this.state.canvas?.dirty;
     const reopen = Menu.getApplicationMenu()?.getMenuItemById('reopen-last-album');
     if (reopen) { reopen.checked = this.appData.reopenLastAlbum; reopen.enabled = !locked; }
@@ -80,7 +86,7 @@ export class AlbumController {
     } finally {
       let album = this.state.album;
       if (album) album = { ...album, pages: this.store.pageReferences(album.id) };
-      this.publish({ busy: false, progress: null, canvas: this.pages.snapshot(), album });
+      this.publish({ busy: false, progress: null, pdfProgress: null, canvas: this.pages.snapshot(), album });
     }
   }
 
@@ -166,7 +172,13 @@ export class AlbumController {
       this.assertSender(event);
       if (typeof requestId === 'string') this.assetImages.release(requestId);
     });
-    installPageImageProtocol((albumId, pageId, objectId) => this.pages.imagePath(albumId, pageId, objectId));
+    installPageImageProtocol((albumId, pageId, objectId) => this.pdf?.imagePath(albumId, pageId, objectId) ?? this.pages.imagePath(albumId, pageId, objectId));
+    ipcMain.handle('album:export-pdf', event => { this.assertSender(event); return this.exportPdf(); });
+    ipcMain.handle('album:cancel-pdf', event => { this.assertSender(event); this.cancelPdf(); });
+    ipcMain.handle('album:print-page', event => {
+      if (!this.pdf) throw new Error('当前没有 PDF 导出任务。');
+      return this.pdf.printPage(event);
+    });
     ipcMain.handle('album:get-state', event => { this.assertSender(event); return this.state; });
     ipcMain.handle('album:create', event => { this.assertSender(event); return this.chooseAlbum(true); });
     ipcMain.handle('album:open', event => { this.assertSender(event); return this.chooseAlbum(false); });
@@ -310,6 +322,54 @@ export class AlbumController {
     return this.run(async () => { await this.pages.save(); return null; });
   }
 
+  /** 由桌面入口注入受限窗口工厂，测试和正式入口共用相同打印流程。 */
+  configurePdf(create: () => BrowserWindow, load: (window: BrowserWindow) => Promise<void>): void {
+    this.pdfWindows = { create, load };
+  }
+
+  /** 菜单和工具栏共用导出锁、保存确认和原生位置授权，不接收界面提供的绝对路径。 */
+  async exportPdf(): Promise<AlbumResult<string>> {
+    return this.run(async () => {
+      const album = this.state.album;
+      if (!album?.pages.length) throw new Error('请先打开画册并创建画布。');
+      if (!this.pdfWindows) throw new Error('PDF 导出窗口尚未初始化。');
+      const name = pdfFileName(album.name);
+      if (this.pages.dirty) {
+        const answer = await dialog.showMessageBox(this.getWindow(), { type: 'question', title: '保存并导出 PDF',
+          message: '当前画布有未保存修改，保存后导出整本画册？', buttons: ['保存并导出', '取消'], defaultId: 0, cancelId: 1 });
+        if (answer.response !== 0) return undefined;
+        await this.pages.save();
+      }
+      const selected = await dialog.showSaveDialog(this.getWindow(), { title: '导出画册 PDF', defaultPath: name,
+        filters: [{ name: 'PDF 文档', extensions: ['pdf'] }], properties: ['showOverwriteConfirmation'] });
+      if (selected.canceled || !selected.filePath) return undefined;
+      // 原生对话框可修改名称；补齐 PDF 后缀，日期建议名始终来自画册名称。
+      const destination = /\.pdf$/iu.test(selected.filePath) ? selected.filePath : `${selected.filePath}.pdf`;
+      if (destination !== selected.filePath) {
+        const { lstat } = await import('node:fs/promises');
+        const exists = await lstat(destination).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
+        if (exists) {
+          const answer = await dialog.showMessageBox(this.getWindow(), { type: 'warning', title: '确认覆盖 PDF',
+            message: `文件已存在：${destination}`, buttons: ['取消', '覆盖'], defaultId: 0, cancelId: 0 });
+          if (answer.response !== 1) return undefined;
+        }
+      }
+      const task = new PdfExport(this.store, this.makePages(this.store), this.pdfWindows.create, this.pdfWindows.load,
+        pdfProgress => this.publish({ pdfProgress }));
+      this.pdf = task;
+      try { return await task.run(album.id, destination, album.name) ? destination : undefined; }
+      finally { this.pdf = null; }
+    });
+  }
+
+  /** 取消绕过业务互斥，仅中断当前导出；发布阶段不能中断文件替换。 */
+  cancelPdf(): void {
+    this.pdf?.cancel();
+    if (this.state.pdfProgress && this.state.pdfProgress.phase !== 'publishing') {
+      this.publish({ pdfProgress: { ...this.state.pdfProgress, canceling: true } });
+    }
+  }
+
   /** 主窗口 close 事件先阻止退出，再确认草稿；业务进行中拒绝关闭。 */
   async canClose(): Promise<boolean> {
     if (this.state.busy) return false;
@@ -318,5 +378,5 @@ export class AlbumController {
   }
 
   /** 主窗口关闭后释放浏览租约和后台图片任务。 */
-  dispose(): void { this.assetImages.reset(); }
+  dispose(): void { this.cancelPdf(); this.assetImages.reset(); }
 }

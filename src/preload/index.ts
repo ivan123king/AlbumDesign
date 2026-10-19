@@ -5,7 +5,9 @@ import type { AlbumState } from '../shared/album';
 
 const desktopApi: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke('framework:app-info'),
-  exportSamplePdf: () => ipcRenderer.invoke('framework:sample-pdf'),
+  exportAlbumPdf: () => ipcRenderer.invoke('album:export-pdf'),
+  cancelPdfExport: () => ipcRenderer.invoke('album:cancel-pdf'),
+  getPdfPrintPage: () => ipcRenderer.invoke('album:print-page'),
   getAppDialog: () => ipcRenderer.invoke('app:get-dialog'),
   respondAppDialog: (id, confirmed) => ipcRenderer.invoke('app:respond-dialog', id, confirmed),
   /** 不向界面传递 Electron 事件对象，取消订阅时移除相同函数。 */

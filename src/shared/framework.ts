@@ -14,11 +14,6 @@ export interface AppInfo {
   chromium: string;
 }
 
-export interface SamplePdfResult {
-  canceled: boolean;
-  filePath?: string;
-}
-
 /** 主进程持有一次性请求 ID；界面只能回应当前弹窗，不能提交任意删除目标。 */
 export type AppDialogRequest =
   | { id: string; kind: 'warning'; title: string; subject: string; message: string }
@@ -28,7 +23,6 @@ export interface AppDialogState { revision: number; request: AppDialogRequest | 
 /** 只提供明确业务方法，不暴露通用 IPC 或文件系统能力。 */
 export interface DesktopApi extends AlbumApi {
   getAppInfo(): Promise<AppInfo>;
-  exportSamplePdf(): Promise<SamplePdfResult>;
   getAppDialog(): Promise<AppDialogState>;
   respondAppDialog(id: string, confirmed: boolean): Promise<boolean>;
   onAppDialog(listener: (state: AppDialogState) => void): () => void;

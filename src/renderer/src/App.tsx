@@ -24,7 +24,6 @@ export function App(): React.JSX.Element {
   const [ready, setReady] = useState(false);
   const [pending, setPending] = useState(false);
   const [interacting, setInteracting] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const [selection, setSelection] = useState<{ kind: 'page' | 'image'; id: string } | null>(null);
   const [fonts, setFonts] = useState<TextFont[]>([]);
   const [textEditor, setTextEditor] = useState<{ object: TextObject | null; mode: WritingMode; position?: { xMm: number; yMm: number } } | null>(null);
@@ -72,12 +71,12 @@ export function App(): React.JSX.Element {
   }, [interacting]);
 
   /** 串行提交界面命令；主进程另有互斥，失败与取消均不显示成功。 */
-  const execute = useCallback(async (operation: () => Promise<AlbumResult<unknown>>, success: string): Promise<boolean> => {
+  const execute = useCallback(async (operation: () => Promise<AlbumResult<unknown>>, success: string | ((value: unknown) => string)): Promise<boolean> => {
     if (localLock.current) return false;
     localLock.current = true; setPending(true);
     try {
       const result = await operation();
-      setMessage(result.status === 'success' ? success : result.status === 'error' ? result.message : '已取消操作');
+      setMessage(result.status === 'success' ? typeof success === 'function' ? success(result.value) : success : result.status === 'error' ? result.message : '已取消操作');
       return result.status === 'success';
     } catch (error) { setMessage(`操作失败：${error instanceof Error ? error.message : String(error)}`); return false; }
     finally { localLock.current = false; setPending(false); }
@@ -135,15 +134,14 @@ export function App(): React.JSX.Element {
     if (workspace.current) setZoom(Math.max(0.1, Math.min(2, (workspace.current.clientWidth - 96) / (size.width * mmToPixels),
       (workspace.current.clientHeight - 128) / (size.height * mmToPixels))));
   }
-  /** 独立样例导出明确保留名称，真实画册 PDF 在后续阶段实现。 */
-  async function exportSample(): Promise<void> {
-    setExporting(true);
-    try {
-      const result = await window.desktop.exportSamplePdf();
-      setMessage(result.canceled ? '已取消样例导出' : `样例已导出：${result.filePath}`);
-    } catch (error) { setMessage(`样例导出失败：${String(error)}`); }
-    finally { setExporting(false); }
+  /** 结果路径由主进程保存对话框授权；菜单触发的进度同样通过画册状态显示。 */
+  async function exportPdf(): Promise<void> {
+    await execute(() => window.desktop.exportAlbumPdf(), value => `画册已导出：${String(value)}`);
   }
+  const pdf = state.pdfProgress;
+  const pdfMessage = pdf ? pdf.canceling ? '正在取消 PDF 导出…' : pdf.phase === 'preparing' ? '正在准备 PDF…'
+    : pdf.phase === 'merging' ? `正在合并 PDF：${pdf.completed} / ${pdf.total} 页`
+      : pdf.phase === 'publishing' ? '正在保存 PDF…' : `正在导出 PDF：${pdf.completed} / ${pdf.total} 页` : '';
   /** 当前页 ID 显式传入，避免延迟事件写入刚切换的新页。 */
   function changeOrientation(value: Orientation): void {
     if (albumId && pageId && !busy) void execute(() => window.desktop.setPageOrientation(albumId, pageId, value), '编辑视角已修改，请保存。');
@@ -152,7 +150,8 @@ export function App(): React.JSX.Element {
   return <div className="app-shell" style={layoutStyle} data-app-ready={info && ready ? 'true' : undefined}>
     <header className="app-header"><div className="brand"><span className="brand-mark">册</span><div><strong>画册工坊</strong><span>留住每一页记忆</span></div></div>
       <div className="document-title">{state.album?.name ?? '尚未打开画册'}{state.canvas?.dirty && <span className="unsaved-mark"> · 未保存</span>}</div>
-      <button className="primary-button" disabled={exporting || busy} onClick={() => { void exportSample(); }}>↗ {exporting ? '正在导出…' : '导出样例 PDF'}</button></header>
+      <button className="primary-button" data-export-pdf disabled={!ready || busy || !state.album?.pages.length || !!textEditor}
+        onClick={() => { void exportPdf(); }}>↗ {pdf ? '正在导出…' : '导出 PDF'}</button></header>
     <nav className="toolbar" aria-label="画册工具"><div className="toolbar-group">
       <button disabled={!ready || busy} data-new-project onClick={() => { void execute(() => window.desktop.createAlbum(), '画册已创建，请在右侧新建画布。'); }}>＋ 新建画册</button>
       <button disabled={!ready || busy} onClick={() => { void execute(() => window.desktop.openAlbum(), '画册已打开。'); }}>打开画册</button>
@@ -167,6 +166,12 @@ export function App(): React.JSX.Element {
       <span>{state.notice}</span>
       {state.canRetryLastAlbum && <button disabled={busy} data-retry-last-album
         onClick={() => { void execute(() => window.desktop.retryLastAlbum(), '上次画册已打开。'); }}>重试打开上次画册</button>}
+    </aside>}
+    {pdf && <aside className="pdf-progress" role="status" data-pdf-progress>
+      <span>{pdfMessage}</span><progress max={pdf.total || 1} value={pdf.completed} aria-label="PDF 导出进度" />
+      <button disabled={pdf.canceling || pdf.phase === 'publishing'} onClick={() => {
+        void window.desktop.cancelPdfExport().catch(error => setMessage(`取消导出失败：${String(error)}`));
+      }}>取消导出</button>
     </aside>}
     <main className="editor-layout"><AssetsPanel state={{ ...state, busy }} onMessage={setMessage} />
       <PanelDivider side="left" width={leftWidth} onChange={setLeftWidth} />

@@ -1,6 +1,7 @@
 /** 文件用途：定义画册存储、素材目录及受限进程通信的数据契约。 */
 import type { Orientation } from './framework';
 import type { CanvasSnapshot, ImageGeometry, TextDraft, TextFont } from './canvas';
+import type { PdfPrintPage, PdfProgress } from './pdf';
 
 /** 页面目录编号与数组中的页序分开保存，后续页面管理沿用此约定。 */
 export interface AlbumPageReference {
@@ -48,6 +49,7 @@ export interface ImportReport {
 
 /** revision 用于丢弃晚到的旧状态，菜单与界面共享同一忙碌状态。 */
 export interface AlbumState {
+  pdfProgress?: PdfProgress | null;
   /** 软件配置与启动恢复的非阻塞提示，独立于画布保存状态。 */
   notice?: string | null;
   canRetryLastAlbum?: boolean;
@@ -67,6 +69,11 @@ export type AlbumResult<T> =
  * 操作分别返回 success、canceled 或带中文原因的 error；连接中断仍可能拒绝 Promise。
  */
 export interface AlbumApi {
+  /** 导出位置由原生对话框授权，失败返回原因；取消保留已有文件。 */
+  exportAlbumPdf(): Promise<AlbumResult<string>>;
+  cancelPdfExport(): Promise<void>;
+  /** 仅本次后台打印窗口可调用，其他来源拒绝请求。 */
+  getPdfPrintPage(): Promise<PdfPrintPage>;
   /** 申请当前素材的原图或缩略图地址；requestId 为一次浏览租约，retry 要求重建小图，失败返回中文原因。 */
   requestAssetImage(albumId: string, assetPath: string, kind: 'preview' | 'thumbnail', requestId: string, retry?: boolean): Promise<AlbumResult<string>>;
   /** 释放浏览租约并取消未开始的生成任务；重复释放无副作用。 */

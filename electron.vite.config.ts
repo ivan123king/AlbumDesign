@@ -4,7 +4,8 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   main: {
-    build: { rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } } }
+    build: { rollupOptions: { input: { index: 'src/main/index.ts', 'pdf-worker': 'src/main/pdf-worker.ts' },
+      output: { format: 'cjs', entryFileNames: '[name].cjs' } } }
   },
   preload: {
     build: { rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } } }

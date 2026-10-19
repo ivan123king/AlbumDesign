@@ -1,10 +1,10 @@
-/** 文件用途：创建桌面窗口、注册受限通信、导出框架样例，并管理应用生命周期。 */
+/** 文件用途：创建桌面/打印窗口、注册受限通信并管理应用生命周期及开发验收。 */
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { AppInfo, SamplePdfResult } from '../shared/framework';
+import type { AppInfo } from '../shared/framework';
 import { runFrameworkSmoke } from './smoke';
 import { AlbumController } from './album-ipc';
 import { declareImageProtocol, installImageProtocol } from './image-validator';
@@ -17,6 +17,7 @@ import { AppDataStore } from './app-data';
 import { runRecentAlbumSmoke } from './recent-album-smoke';
 import { runAssetDeleteSmoke } from './asset-delete-smoke';
 import { AppDialogs } from './app-dialogs';
+import { runPdfSmoke } from './pdf-smoke';
 
 declareImageProtocol();
 
@@ -25,24 +26,24 @@ const layerSmoke = !app.isPackaged && process.argv.includes('--layer-smoke');
 const assetSmoke = !app.isPackaged && process.argv.includes('--asset-preview-smoke');
 const recentSmoke = !app.isPackaged && process.argv.includes('--recent-smoke');
 const assetDeleteSmoke = !app.isPackaged && process.argv.includes('--asset-delete-smoke');
-const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke || assetSmoke || recentSmoke || assetDeleteSmoke);
+const pdfSmoke = !app.isPackaged && process.argv.includes('--pdf-smoke');
+const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke || assetSmoke || recentSmoke || assetDeleteSmoke || pdfSmoke);
 const projectRoot = join(__dirname, '../..');
 const rendererFile = join(__dirname, '../renderer/index.html');
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined;
 let mainWindow: BrowserWindow | null = null;
-let exporting = false;
 
 /** 本地打包界面与开发服务器共用入口，打印页只切换查询参数。 */
-async function loadRenderer(window: BrowserWindow, printing = false): Promise<void> {
+async function loadRenderer(window: BrowserWindow, printing: boolean | 'album-print' = false): Promise<void> {
   if (developmentUrl) {
     const url = new URL(developmentUrl);
     if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
       throw new Error('开发服务器必须位于本机。');
     }
-    if (printing) url.searchParams.set('view', 'print');
+    if (printing) url.searchParams.set('view', printing === 'album-print' ? printing : 'print');
     await window.loadURL(url.href);
   } else {
-    await window.loadFile(rendererFile, { query: printing ? { view: 'print' } : {} });
+    await window.loadFile(rendererFile, { query: printing ? { view: printing === 'album-print' ? printing : 'print' } : {} });
   }
 }
 
@@ -110,34 +111,19 @@ async function exportSamplePdf(filePath: string): Promise<void> {
   }
 }
 
-/** 用户通过保存对话框选择样例位置，取消与失败分别反馈，不接收界面传入路径。 */
-async function chooseSamplePdf(): Promise<SamplePdfResult> {
-  if (!mainWindow || exporting) throw new Error('已有导出任务正在进行。');
-  exporting = true;
-  try {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: '导出双页 A4 样例',
-      defaultPath: '画册工坊-A4样例.pdf',
-      filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
-    });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    await exportSamplePdf(result.filePath);
-    return { canceled: false, filePath: result.filePath };
-  } finally {
-    exporting = false;
-  }
-}
-
 /** 安装原生菜单，画册入口及手动保存与界面共用控制器和忙碌状态。 */
 function installMenu(albums: AlbumController, dialogs: AppDialogs): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: '文件', submenu: [
-      { id: 'create-album', label: '新建画册…', click: () => { void albums.chooseAlbum(true); } },
-      { id: 'open-album', label: '打开画册…', click: () => { void albums.chooseAlbum(false); } },
+      { id: 'create-album', label: '新建画册', click: () => { void albums.chooseAlbum(true); } },
+      { id: 'open-album', label: '打开画册', click: () => { void albums.chooseAlbum(false); } },
       { id: 'save-page', label: '保存', accelerator: 'CmdOrCtrl+S', enabled: false, click: () => { void albums.savePage(); } },
       { type: 'separator' },
-      { id: 'export-sample', label: '导出双页 A4 样例…', click: () => {
-        void chooseSamplePdf().catch(error => dialog.showErrorBox('导出失败', String(error)));
+      { id: 'export-pdf', label: '导出 PDF', enabled: false, click: () => {
+        void albums.exportPdf().then(result => {
+          if (mainWindow && result.status === 'success') void dialog.showMessageBox(mainWindow,
+            { type: 'info', title: 'PDF 导出完成', message: `画册已导出：${result.value}` });
+        });
       } },
       { type: 'separator' },
       { role: 'quit', label: '退出' }
@@ -184,19 +170,18 @@ async function bootstrap(): Promise<void> {
     return { version: app.getVersion(), electron: process.versions.electron,
       chromium: process.versions.chrome };
   });
-  ipcMain.handle('framework:sample-pdf', event => {
-    assertMainSender(event);
-    return chooseSamplePdf();
-  });
   const appData = new AppDataStore(join(profile, 'data'));
   const dialogs: AppDialogs = new AppDialogs(() => mainWindow, assertMainSender, (): void => albums.updateMenu());
   const albums = new AlbumController(() => {
     if (!mainWindow) throw new Error('主窗口已关闭。');
     return mainWindow;
   }, assertMainSender, appData, dialogs);
+  albums.configurePdf(() => createWindow(true), window => loadRenderer(window, 'album-print'));
   albums.register();
   installMenu(albums, dialogs);
   mainWindow = createWindow(smokeMode);
+  mainWindow.webContents.on('did-start-loading', () => albums.cancelPdf());
+  mainWindow.webContents.on('render-process-gone', () => albums.cancelPdf());
   dialogs.register(mainWindow);
   // 在渲染页面载入前占用操作锁，广播丢失也可通过初始状态查询获取结果。
   const initialization = albums.initialize(!smokeMode || recentSmoke);
@@ -212,6 +197,10 @@ async function bootstrap(): Promise<void> {
   await loadRenderer(mainWindow);
   await initialization;
   if (smokeMode) {
+    if (pdfSmoke) {
+      await runPdfSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
+      app.quit(); return;
+    }
     if (assetDeleteSmoke) {
       await runAssetDeleteSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
       app.quit(); return;
