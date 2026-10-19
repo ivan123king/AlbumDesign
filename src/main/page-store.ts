@@ -3,8 +3,9 @@ import { copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, unlink, wr
 import { join, extname, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AlbumPageReference } from '../shared/album';
-import type { CanvasDocument, CanvasSnapshot, ImageGeometry, ImageObject } from '../shared/canvas';
-import { fitImage } from '../shared/canvas';
+import type { CanvasDocument, CanvasSnapshot, ImageGeometry, ImageObject, TextDraft, TextObject } from '../shared/canvas';
+import { fitImage, normalizeAngle } from '../shared/canvas';
+import { getTextFonts, textFontFamilies } from './text-fonts';
 import type { Orientation } from '../shared/framework';
 import { AlbumStore, publishExclusive } from './album-store';
 import { replaceJson } from './json-storage';
@@ -21,27 +22,52 @@ function assertPageName(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !value.trim() || value.length > 120 || /[\u0000-\u001f]/u.test(value)) throw new Error('画布名称需为 1～120 个可见字符。');
 }
 
-/** 正式文件只接受已知的图片模型；编号、对象 ID、叠层分别校验。 */
+/** 文字排版参数在 IPC 和读盘时共用校验，禁止无效尺寸、样式和过量内容。 */
+function validateText(draft: TextDraft): void {
+  if (!draft || typeof draft.text !== 'string' || !draft.text.trim() || draft.text.length > 100000
+    || !['horizontal', 'vertical'].includes(draft.writingMode) || !textFontFamilies.includes(draft.fontFamily)
+    || typeof draft.color !== 'string' || !/^#[0-9a-f]{6}$/iu.test(draft.color)
+    || !Number.isFinite(draft.fontSizePt) || draft.fontSizePt < 0.1 || draft.fontSizePt > 10000
+    || !Number.isFinite(draft.letterSpacingPt) || draft.letterSpacingPt < -1000 || draft.letterSpacingPt > 10000
+    || !Number.isFinite(draft.lineSpacing) || draft.lineSpacing < 0.5 || draft.lineSpacing > 5
+    || !Number.isSafeInteger(draft.columns) || draft.columns < 1 || draft.columns > 8 || (draft.writingMode === 'vertical' && draft.columns !== 1)
+    || !Number.isFinite(draft.columnGapMm) || draft.columnGapMm < 0 || draft.columnGapMm > 100000
+    || ![draft.widthMm, draft.heightMm].every(value => Number.isFinite(value) && value >= 1 && value <= 100000)) {
+    throw new Error('文字内容、字体、尺寸或排版参数无效。');
+  }
+}
+
+/** 兼容版本 1 图片页面；版本 2 支持真实文字和任意对象角度，不默默降级未知数据。 */
 export function parseCanvas(value: unknown): CanvasDocument {
   if (!value || typeof value !== 'object') throw new Error('画布文件格式错误。');
   const data = value as CanvasDocument;
   assertOrientation(data.orientation);
-  if (data.formatVersion !== 1 || data.widthMm !== 210 || data.heightMm !== 297
+  if (![1, 2].includes(data.formatVersion) || data.widthMm !== 210 || data.heightMm !== 297
     || !Number.isSafeInteger(data.nextImageNumber) || data.nextImageNumber < 1 || !Array.isArray(data.objects)) throw new Error('画布格式、A4 尺寸或图片计数无效。');
   const ids = new Set<string>();
   const files = new Set<string>();
   const layers = new Set<number>();
   for (const item of data.objects) {
-    if (!item || item.kind !== 'image' || typeof item.id !== 'string' || !item.id || ids.has(item.id)
-      || typeof item.fileName !== 'string' || !/^\d{3,}\.(?:jpg|jpeg|png)$/iu.test(item.fileName)
-      || files.has(item.fileName.toLowerCase()) || Number(item.fileName.split('.')[0]) < 1
-      || Number(item.fileName.split('.')[0]) >= data.nextImageNumber
-      || typeof item.sourceName !== 'string' || item.sourceName.length > 255
+    if (!item || !['image', 'text'].includes(item.kind) || typeof item.id !== 'string' || !item.id || ids.has(item.id)
       || ![item.xMm, item.yMm, item.widthMm, item.heightMm].every(Number.isFinite)
       || Math.abs(item.xMm) > 100000 || Math.abs(item.yMm) > 100000 || item.widthMm <= 0 || item.heightMm <= 0
-      || item.widthMm > 100000 || item.heightMm > 100000 || ![0, 90, 180, 270].includes(item.rotation)
-      || !Number.isSafeInteger(item.zIndex) || item.zIndex < 0 || layers.has(item.zIndex)) throw new Error('画布图片记录包含无效路径、坐标、编号或叠层。');
-    ids.add(item.id); files.add(item.fileName.toLowerCase()); layers.add(item.zIndex);
+      || item.widthMm > 100000 || item.heightMm > 100000 || !Number.isFinite(item.rotation) || item.rotation < 0 || item.rotation >= 360
+      || !Number.isSafeInteger(item.zIndex) || item.zIndex < 0 || layers.has(item.zIndex)) throw new Error('画布对象包含无效坐标、角度或叠层。');
+    if (data.formatVersion === 1 && (item.kind !== 'image' || ![0, 90, 180, 270].includes(item.rotation))) throw new Error('旧版本页面不能保存文字或自由角度。');
+    if (item.kind === 'image') {
+      if (typeof item.fileName !== 'string' || !/^\d{3,}\.(?:jpg|jpeg|png)$/iu.test(item.fileName)
+        || files.has(item.fileName.toLowerCase()) || Number(item.fileName.split('.')[0]) < 1
+        || Number(item.fileName.split('.')[0]) >= data.nextImageNumber || typeof item.sourceName !== 'string'
+        || item.sourceName.length > 255) throw new Error('图片文件编号或引用无效。');
+      files.add(item.fileName.toLowerCase());
+    } else {
+      validateText(item);
+      if (![item.layoutWidthMm, item.layoutHeightMm].every(size => Number.isFinite(size) && size >= 1 && size <= 100000)
+        || Math.abs(item.widthMm / item.layoutWidthMm - item.heightMm / item.layoutHeightMm) > 1e-7 * Math.max(1, item.widthMm / item.layoutWidthMm)) {
+        throw new Error('文字框只允许等比例缩放。');
+      }
+    }
+    ids.add(item.id); layers.add(item.zIndex);
   }
   return data;
 }
@@ -107,7 +133,12 @@ export class PageStore {
     try { value = JSON.parse(text); } catch { throw new Error('canvas.json 已损坏，未覆盖原有数据。'); }
     const document = parseCanvas(value);
     const warnings: string[] = [];
+    const fonts = document.objects.some(object => object.kind === 'text') ? await getTextFonts() : [];
     for (const object of document.objects) {
+      if (object.kind === 'text') {
+        if (!fonts.some(font => font.family === object.fontFamily && font.available)) warnings.push(`文字字体缺失：${object.fontFamily}，请安装字体或重新编辑选择字体。`);
+        continue;
+      }
       try { await this.imagePath(albumId, pageId, object.id, document); }
       catch (error) { warnings.push(`${object.fileName} 无法加载：${error instanceof Error ? error.message : String(error)}`); }
     }
@@ -125,7 +156,7 @@ export class PageStore {
     const path = join(root, 'pages', reference.directoryName);
     await mkdir(path);
     try {
-      const document: CanvasDocument = { formatVersion: 1, widthMm: 210, heightMm: 297, orientation, nextImageNumber: 1, objects: [] };
+      const document: CanvasDocument = { formatVersion: 2, widthMm: 210, heightMm: 297, orientation, nextImageNumber: 1, objects: [] };
       await writeFile(join(path, 'canvas.json'), JSON.stringify(document, null, 2) + '\n', { flag: 'wx' });
       manifest.pages.push(reference);
       await this.albums.commitManifest(albumId, manifest);
@@ -251,8 +282,44 @@ export class PageStore {
     }
     const object = active.document.objects.find(item => item.id === objectId);
     if (!object) throw new Error('图片对象不存在。');
+    if (object.kind === 'text' && Math.abs(geometry.widthMm / object.widthMm - geometry.heightMm / object.heightMm) > 1e-7 * Math.max(1, geometry.widthMm / object.widthMm)) {
+      throw new Error('文字只支持四角等比例缩放，不能单独拉伸长宽。');
+    }
     object.xMm = geometry.xMm; object.yMm = geometry.yMm;
     object.widthMm = geometry.widthMm; object.heightMm = geometry.heightMm;
+  }
+
+  /** 自由旋转只修改自身角度，不改变中心、长宽或叠层；保存时才升级旧页面格式。 */
+  rotate(albumId: string, pageId: string, objectId: string, angle: number): void {
+    const active = this.current(albumId, pageId);
+    if (!Number.isFinite(angle) || Math.abs(angle) > 1e7) throw new Error('旋转角度无效。');
+    const object = active.document.objects.find(item => item.id === objectId);
+    if (!object) throw new Error('对象不存在。');
+    object.rotation = normalizeAngle(angle);
+    if (object.rotation % 90 !== 0) active.document.formatVersion = 2;
+  }
+
+  /** 创建或重新编辑真实文字；编辑时以实际字号和区域重新排版，不消耗图片编号。 */
+  async putText(albumId: string, pageId: string, objectId: string | null, draft: TextDraft,
+    position?: { xMm: number; yMm: number }): Promise<string> {
+    const active = this.current(albumId, pageId);
+    validateText(draft);
+    if (!(await getTextFonts()).some(font => font.family === draft.fontFamily && font.available)) throw new Error('所选字体未安装，请更换字体后重试。');
+    const previous = objectId ? active.document.objects.find(item => item.id === objectId) : undefined;
+    if (objectId && previous?.kind !== 'text') throw new Error('文字对象不存在。');
+    if (position && (![position.xMm, position.yMm].every(Number.isFinite) || Math.abs(position.xMm) > 100000 || Math.abs(position.yMm) > 100000)) throw new Error('文字位置无效。');
+    const cx = previous ? previous.xMm + previous.widthMm / 2 : position?.xMm ?? 105;
+    const cy = previous ? previous.yMm + previous.heightMm / 2 : position?.yMm ?? 148.5;
+    const object: TextObject = { ...draft, kind: 'text', id: previous?.id ?? randomUUID(),
+      xMm: cx - draft.widthMm / 2, yMm: cy - draft.heightMm / 2,
+      rotation: previous?.rotation ?? (active.document.orientation === 'landscape' ? 90 : 0),
+      zIndex: previous?.zIndex ?? Math.max(-1, ...active.document.objects.map(item => item.zIndex)) + 1,
+      layoutWidthMm: draft.widthMm, layoutHeightMm: draft.heightMm };
+    const next: CanvasDocument = { ...active.document, formatVersion: 2,
+      objects: previous ? active.document.objects.map(item => item.id === objectId ? object : item) : [...active.document.objects, object] };
+    parseCanvas(next);
+    active.document = next;
+    return object.id;
   }
 
   /** 整页方向与对象角度分开保存，不重算或累计改变任何对象坐标。 */
@@ -261,12 +328,16 @@ export class PageStore {
     this.current(albumId, pageId).document.orientation = orientation;
   }
 
-  /** 删除本页独立副本，JSON 提交失败则恢复文件，不触碰 assets。 */
-  async deleteImage(albumId: string, pageId: string, objectId: string): Promise<void> {
+  /** 删除文字仅提交对象记录；图片同时删除本页副本，失败恢复，不触碰 assets。 */
+  async deleteObject(albumId: string, pageId: string, objectId: string): Promise<void> {
     const active = this.current(albumId, pageId);
     if (this.dirty) throw new Error('请先保存或放弃当前画布修改。');
     const object = active.document.objects.find(item => item.id === objectId);
     if (!object) throw new Error('图片对象不存在。');
+    if (object.kind === 'text') {
+      await this.commit({ ...active.document, objects: active.document.objects.filter(item => item.id !== objectId) });
+      return;
+    }
     const { path } = await this.pageDirectory(albumId, pageId);
     const file = join(path, object.fileName);
     const isolated = join(path, `.delete-${randomUUID()}.tmp`);
@@ -279,11 +350,16 @@ export class PageStore {
     active.warnings = active.warnings.filter(warning => !warning.startsWith(`${object.fileName} `));
   }
 
+  /** 保留既有图片验收入口，实际删除由共用对象流程处理。 */
+  async deleteImage(albumId: string, pageId: string, objectId: string): Promise<void> {
+    await this.deleteObject(albumId, pageId, objectId);
+  }
+
   /** 资源协议按当前会话、页面 ID 和对象 ID 定位文件，拒绝任意路径和目录链接。 */
   async imagePath(albumId: string, pageId: string, objectId: string, loaded?: CanvasDocument): Promise<string> {
     const document = loaded ?? this.current(albumId, pageId).document;
     const object = document.objects.find(item => item.id === objectId);
-    if (!object) throw new Error('图片对象不存在。');
+    if (!object || object.kind !== 'image') throw new Error('图片对象不存在。');
     const { path } = await this.pageDirectory(albumId, pageId);
     const file = join(path, object.fileName);
     const info = await lstat(file);

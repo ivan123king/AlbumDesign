@@ -67,14 +67,30 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .canvas-empty p { font-size: 5mm; margin: 4mm 0; }
 .canvas-empty small { font-size: 3mm; }
 .editable-paper[data-orientation="landscape"] .canvas-empty { transform: rotate(90deg); }
-.canvas-picture { position: absolute; transform-origin: center; cursor: grab; touch-action: none; user-select: none; outline: none; }
-.canvas-picture:active { cursor: grabbing; }
-.canvas-picture:focus-visible { outline: 2px dashed #54753c; outline-offset: -2px; }
+.canvas-object { position: absolute; transform-origin: center; cursor: grab; touch-action: none; user-select: none; outline: none; }
+.canvas-object:active { cursor: grabbing; }
+.canvas-object:focus-visible { outline: 2px dashed #54753c; outline-offset: -2px; }
 .canvas-picture img { display: block; width: 100%; height: 100%; object-fit: fill; image-orientation: from-image; pointer-events: none; }
 /* 选框位于独立编辑层，不改变图片叠层；控制点和边框保持固定的屏幕像素大小。 */
-.image-selection { position: absolute; z-index: 2147483647; pointer-events: none; outline: calc(1.5 * var(--selection-pixel)) solid #567a3c; }
-.image-selection .resize-handle { position: absolute; transform: translate(-50%, -50%); width: calc(12 * var(--selection-pixel)); height: calc(12 * var(--selection-pixel)); padding: 0; border: calc(1.5 * var(--selection-pixel)) solid #567a3c; border-radius: 50%; background: #fff; pointer-events: auto; touch-action: none; }
-.image-selection .resize-handle:focus-visible { outline: calc(2 * var(--selection-pixel)) solid #a1b989; outline-offset: calc(2 * var(--selection-pixel)); }
+.object-selection { position: absolute; transform-origin: center; z-index: 2147483647; pointer-events: none; outline: calc(1.5 * var(--selection-pixel)) solid #567a3c; }
+.object-selection .resize-handle { position: absolute; transform: translate(-50%, -50%); width: calc(12 * var(--selection-pixel)); height: calc(12 * var(--selection-pixel)); padding: 0; border: calc(1.5 * var(--selection-pixel)) solid #567a3c; border-radius: 50%; background: #fff; pointer-events: auto; touch-action: none; }
+.object-selection .resize-handle:focus-visible { outline: calc(2 * var(--selection-pixel)) solid #a1b989; outline-offset: calc(2 * var(--selection-pixel)); }
+.rotation-stem { position: absolute; left: 50%; top: calc(-30 * var(--selection-pixel)); height: calc(30 * var(--selection-pixel)); border-left: var(--selection-pixel) solid #567a3c; }
+.object-selection .rotation-handle { position: absolute; left: 50%; top: calc(-30 * var(--selection-pixel)); transform: translate(-50%, -50%); width: calc(24 * var(--selection-pixel)); height: calc(24 * var(--selection-pixel)); padding: 0; border: calc(1.5 * var(--selection-pixel)) solid #567a3c; border-radius: 50%; background: #fff; color: #567a3c; font-size: calc(18 * var(--selection-pixel)); line-height: 1; pointer-events: auto; touch-action: none; cursor: grab; }
+.rotation-angle { position: absolute; left: 50%; top: calc(-60 * var(--selection-pixel)); transform: translateX(-50%); background: #fff; color: #526b40; padding: calc(3 * var(--selection-pixel)); border-radius: calc(3 * var(--selection-pixel)); font-size: calc(12 * var(--selection-pixel)); white-space: nowrap; }
+/* 文字排版区固定，缩放只作用于内层整体，保持中文换行、竖排列序与间距比例。 */
+.text-layout { position: absolute; top: 0; left: 0; box-sizing: border-box; padding: 2mm; overflow: clip; transform: scale(var(--text-scale, 1)); transform-origin: top left; pointer-events: none; }
+.text-flow { width: 100%; height: 100%; white-space: pre-wrap; overflow-wrap: anywhere; column-fill: auto; }
+.text-overflow-hint { position: absolute; right: 0; bottom: 0; color: #a55235; background: #fff4dd; padding: 2px 4px; font-size: 11px; pointer-events: none; }
+.group-dialog.text-dialog { width: min(680px, 92vw); max-height: 90vh; overflow: auto; }
+.text-dialog textarea { width: 100%; min-height: 110px; resize: vertical; border: 1px solid #bdc9ac; border-radius: 4px; padding: 10px; font: 14px/1.7 "Microsoft YaHei", sans-serif; }
+.text-settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px; }
+.text-settings select { width: 100%; padding: 9px; border: 1px solid #bdc9ac; border-radius: 4px; font: inherit; font-size: 12px; background: white; }
+.text-settings input[type="color"] { height: 38px; padding: 4px; }
+.text-dialog-preview { position: relative; height: 175px; overflow: hidden; border: 1px solid #d8dfcf; background: #e9ece4; }
+.text-dialog-preview > div { position: absolute; left: 50%; top: 50%; background: white; transform-origin: center; }
+.text-dialog .size-input-error { color: #a55235; }
+@media print { .text-overflow-hint, .object-selection { display: none !important; } }
 .image-missing { position: absolute; inset: 0; display: grid; align-content: center; text-align: center; background: #f6eee8; color: #9c513b; border: 1px dashed; font-size: 5mm; overflow-wrap: anywhere; }
 .no-page { margin: auto; text-align: center; color: #7e8d70; max-width: 100%; }
 .no-page > span { font-size: 60px; color: #b1bba6; }

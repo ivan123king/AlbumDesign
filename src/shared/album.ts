@@ -1,6 +1,6 @@
 /** 文件用途：定义画册存储、素材目录及受限进程通信的数据契约。 */
 import type { Orientation } from './framework';
-import type { CanvasSnapshot, ImageGeometry } from './canvas';
+import type { CanvasSnapshot, ImageGeometry, TextDraft, TextFont } from './canvas';
 
 /** 页面目录编号与数组中的页序分开保存，后续页面管理沿用此约定。 */
 export interface AlbumPageReference {
@@ -78,6 +78,12 @@ export interface AlbumApi {
   addPageImage(albumId: string, pageId: string, assetPath: string): Promise<AlbumResult<null>>;
   movePageImage(albumId: string, pageId: string, objectId: string, xMm: number, yMm: number): Promise<AlbumResult<null>>;
   resizePageImage(albumId: string, pageId: string, objectId: string, geometry: ImageGeometry): Promise<AlbumResult<null>>;
+  movePageObject(albumId: string, pageId: string, objectId: string, xMm: number, yMm: number): Promise<AlbumResult<null>>;
+  resizePageObject(albumId: string, pageId: string, objectId: string, geometry: ImageGeometry): Promise<AlbumResult<null>>;
+  rotatePageObject(albumId: string, pageId: string, objectId: string, angle: number): Promise<AlbumResult<null>>;
+  deletePageObject(albumId: string, pageId: string, objectId: string): Promise<AlbumResult<null>>;
+  putPageText(albumId: string, pageId: string, objectId: string | null, draft: TextDraft, position?: { xMm: number; yMm: number }): Promise<AlbumResult<string>>;
+  getTextFonts(): Promise<TextFont[]>;
   deletePageImage(albumId: string, pageId: string, objectId: string): Promise<AlbumResult<null>>;
   setPageOrientation(albumId: string, pageId: string, orientation: Orientation): Promise<AlbumResult<null>>;
   savePage(): Promise<AlbumResult<null>>;

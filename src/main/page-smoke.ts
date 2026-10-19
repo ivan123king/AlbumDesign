@@ -10,6 +10,7 @@ import { ImageValidationTask } from './image-validator';
 import type { AlbumController } from './album-ipc';
 import type { AlbumState } from '../shared/album';
 import { screenDeltaToPaper } from '../shared/canvas';
+import type { ImageObject } from '../shared/canvas';
 import { runResizeSmoke } from './resize-smoke';
 
 /** 等待真实渲染进程状态，避免依赖操作耗时猜测。 */
@@ -56,7 +57,7 @@ export async function runPageSmoke(window: BrowserWindow, output: string, contro
     assert.deepEqual(await task.inspect(join(root, 'assets', '方向照片.jpg'), 'jpeg'), { width: 180, height: 320 });
     await pages.create(album.id, '第一张', 'portrait'); const first = pages.snapshot()!.pageId;
     await pages.addImage(album.id, first, '中文素材.png'); await pages.addImage(album.id, first, '中文素材.png');
-    const objects = pages.snapshot()!.document.objects;
+    const objects = pages.snapshot()!.document.objects.filter((item): item is ImageObject => item.kind === 'image');
     assert.equal(objects[0]!.fileName, '001.png'); assert.equal(objects[1]!.fileName, '002.png');
     assert(objects[0]!.id !== objects[1]!.id); assert.equal(objects[1]!.zIndex, 1);
     assert.equal(objects[0]!.widthMm, 210); assert.equal(objects[0]!.xMm, 0);
@@ -80,7 +81,7 @@ export async function runPageSmoke(window: BrowserWindow, output: string, contro
     await assert.rejects(lstat(join(root, 'pages', '001', '001.png')), { code: 'ENOENT' });
     assert.deepEqual(await readFile(join(root, 'pages', '001', '002.png')), png);
     await pages.addImage(album.id, first, '改名后的素材.png');
-    assert.equal(pages.snapshot()!.document.objects.at(-1)!.fileName, '003.png');
+    assert.equal((pages.snapshot()!.document.objects.at(-1)! as ImageObject).fileName, '003.png');
     assert.deepEqual(await readFile(join(root, 'assets', '改名后的素材.png')), png);
     await pages.create(album.id, '横版', 'landscape'); const second = pages.snapshot()!.pageId;
     await pages.addImage(album.id, second, '方向照片.jpg');
@@ -146,7 +147,7 @@ export async function runPageSmoke(window: BrowserWindow, output: string, contro
     await waitFor(window, "document.querySelector('.canvas-picture img').naturalWidth === 320");
     const current = await state(); const pageId = current.canvas!.pageId; const objectId = current.canvas!.document.objects[0]!.id;
     assert.equal(current.album!.pages.at(-1)!.directoryName, '004');
-    assert.equal(current.canvas!.document.objects[0]!.sourceName, '改名后的素材.png');
+    assert.equal((current.canvas!.document.objects[0]! as ImageObject).sourceName, '改名后的素材.png');
     const originalObject = structuredClone(current.canvas!.document.objects[0]!);
     // 素材删除后页面使用独立副本，且关闭旧页的资源 URL 无法读取当前页以外的对象。
     await rm(join(movedRoot, 'assets', '改名后的素材.png'));

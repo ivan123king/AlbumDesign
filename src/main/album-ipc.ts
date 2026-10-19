@@ -6,7 +6,8 @@ import { ImageValidationTask } from './image-validator';
 import { installPageImageProtocol } from './image-validator';
 import { PageStore } from './page-store';
 import type { Orientation } from '../shared/framework';
-import type { ImageGeometry } from '../shared/canvas';
+import type { ImageGeometry, TextDraft } from '../shared/canvas';
+import { getTextFonts } from './text-fonts';
 import type { AlbumResult, AlbumSnapshot, AlbumState, ImportReport } from '../shared/album';
 
 /** 主菜单与 preload 共用控制器，避免并行导入和切换画册造成错写。 */
@@ -106,6 +107,15 @@ export class AlbumController {
     ipcMain.handle('album:create', event => { this.assertSender(event); return this.chooseAlbum(true); });
     ipcMain.handle('album:open', event => { this.assertSender(event); return this.chooseAlbum(false); });
     ipcMain.handle('page:save', event => { this.assertSender(event); return this.savePage(); });
+    ipcMain.handle('text:fonts', event => { this.assertSender(event); return getTextFonts(); });
+    ipcMain.handle('page:text', (event, albumId: string, pageId: string, objectId: string | null, draft: TextDraft, position?: { xMm: number; yMm: number }) => {
+      this.assertSender(event);
+      return this.run(async () => {
+        this.assertArguments(albumId, pageId);
+        if (objectId !== null && typeof objectId !== 'string') throw new Error('文字对象参数无效。');
+        return this.pages.putText(albumId, pageId, objectId, draft, position);
+      });
+    });
     ipcMain.handle('page:command', (event, albumId: string, command: string, pageId: string, value: unknown) => {
       this.assertSender(event);
       return this.run(async () => {
@@ -118,6 +128,10 @@ export class AlbumController {
           const resize = value as { objectId: string; geometry: ImageGeometry };
           if (!resize || typeof resize.objectId !== 'string') throw new Error('图片尺寸参数无效。');
           this.pages.resize(albumId, pageId, resize.objectId, resize.geometry);
+        } else if (command === 'rotate') {
+          const rotation = value as { objectId: string; angle: number };
+          if (!rotation || typeof rotation.objectId !== 'string') throw new Error('旋转参数无效。');
+          this.pages.rotate(albumId, pageId, rotation.objectId, rotation.angle);
         } else if (command === 'orientation') {
           this.pages.setOrientation(albumId, pageId, value as Orientation);
         } else {
@@ -132,10 +146,10 @@ export class AlbumController {
           else if (command === 'add-image') await this.pages.addImage(albumId, pageId, value as string);
           else if (command === 'delete-page' || command === 'delete-image') {
             const answer = await dialog.showMessageBox(this.getWindow(), { type: 'warning', title: '确认删除',
-              message: command === 'delete-page' ? '删除此画布及其全部页面图片？此操作会删除真实文件。' : '删除此图片及本页副本？素材库原图保留。',
+              message: command === 'delete-page' ? '删除此画布及其全部页面图片和文字？此操作会删除真实文件。' : '删除选中的图片或文字？图片同时删除本页副本，素材库原图保留。',
               buttons: ['取消', '删除'], defaultId: 0, cancelId: 0 });
             if (answer.response !== 1) return undefined;
-            if (command === 'delete-image') await this.pages.deleteImage(albumId, pageId, value as string);
+            if (command === 'delete-image') await this.pages.deleteObject(albumId, pageId, value as string);
             else {
               const before = (await this.store.project(albumId)).manifest.pages;
               const index = before.findIndex(item => item.id === pageId);

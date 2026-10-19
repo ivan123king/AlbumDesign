@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AlbumState } from '../../../shared/album';
 import type { Orientation } from '../../../shared/framework';
-import type { ImageGeometry, ImageObject } from '../../../shared/canvas';
+import type { CanvasObject, ImageGeometry, TextObject } from '../../../shared/canvas';
+import { objectLabel } from '../../../shared/canvas';
 import { ImageSizeDialog } from './ImageSizeDialog';
 
 /** 新建与改名共用表单，名称仅用于显示，不作为目录路径。 */
@@ -34,10 +35,11 @@ function PageDialog({ mode, name: initial, busy, onSubmit, onClose }: {
 }
 
 /** 只展开当前页的对象，按叠层从高到低列出，选中被遮盖对象也能删除或移动。 */
-export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, onResize, onCreate, onRename, onReorder, onDelete }: {
+export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, onResize, onRotate, onEditText, onCreate, onRename, onReorder, onDelete }: {
   state: AlbumState; selectedId: string | null;
   onSelectPage: (id: string) => void; onSelectObject: (id: string) => void;
   onResize: (id: string, geometry: ImageGeometry) => Promise<boolean>;
+  onRotate: (id: string, angle: number) => Promise<boolean>; onEditText: (object: TextObject) => void;
   onCreate: (name: string, orientation: Orientation) => Promise<boolean>;
   onRename: (pageId: string, name: string) => Promise<boolean>;
   onReorder: (pageId: string, direction: -1 | 1) => void;
@@ -45,8 +47,8 @@ export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, on
 }): React.JSX.Element {
   const { album, canvas, busy } = state;
   const [dialog, setDialog] = useState<{ mode: 'create' | 'rename'; pageId: string; name: string } | null>(null);
-  const [menu, setMenu] = useState<{ object: ImageObject; x: number; y: number } | null>(null);
-  const [sizeObject, setSizeObject] = useState<ImageObject | null>(null);
+  const [menu, setMenu] = useState<{ object: CanvasObject; x: number; y: number } | null>(null);
+  const [sizeObject, setSizeObject] = useState<CanvasObject | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => { setDialog(null); }, [album?.id]);
   useEffect(() => { setMenu(null); setSizeObject(null); }, [album?.id, canvas?.pageId]);
@@ -68,7 +70,7 @@ export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, on
   const index = album?.pages.findIndex(page => page.id === current?.id) ?? -1;
   return <aside className="side-panel pages-panel" aria-label="画布与对象">
     <div className="panel-heading"><h2>画布与对象</h2><span className="count-badge">{album?.pages.length ?? 0}</span></div>
-    <div className="panel-subtitle">按页序排列 · 展开当前页图片</div>
+    <div className="panel-subtitle">按页序排列 · 图片与文字对象</div>
     <button className="add-page" disabled={!album || busy} onClick={() => setDialog({ mode: 'create', pageId: '', name: `画布 ${(album?.pages.length ?? 0) + 1}` })}>＋ 新建画布</button>
     <div className="page-list">{album?.pages.map((page, number) => <div key={page.id}>
       <button className={`page-row ${page.id === current?.id ? 'selected' : ''}`} data-page-button={page.id}
@@ -83,31 +85,34 @@ export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, on
       </button>
       {canvas?.pageId === page.id && <div className="object-list">{[...canvas.document.objects].sort((a, b) => b.zIndex - a.zIndex).map(object =>
         <button key={object.id} data-object-button={object.id} className={selectedId === object.id ? 'selected' : ''}
-          disabled={busy} aria-pressed={selectedId === object.id} onClick={() => onSelectObject(object.id)} title={object.sourceName}
+          disabled={busy} aria-pressed={selectedId === object.id} onClick={() => onSelectObject(object.id)} title={objectLabel(object)}
           onContextMenu={event => {
             event.preventDefault(); if (busy) return;
             onSelectObject(object.id);
             const bounds = event.currentTarget.getBoundingClientRect();
             setMenu({ object, x: Math.max(8, Math.min(event.clientX || bounds.left, window.innerWidth - 200)),
-              y: Math.max(8, Math.min(event.clientY || bounds.bottom, window.innerHeight - 52)) });
+              y: Math.max(8, Math.min(event.clientY || bounds.bottom, window.innerHeight - 190)) });
           }}>
-          <span aria-hidden="true">▧</span><span>{object.sourceName}</span></button>)}
-        {!canvas.document.objects.length && <small>尚无图片</small>}</div>}
+          <span aria-hidden="true">{object.kind === 'image' ? '▧' : '文'}</span><span>{objectLabel(object)}</span></button>)}
+        {!canvas.document.objects.length && <small>尚无对象</small>}</div>}
     </div>)}</div>
     {current && <><div className="page-actions"><button disabled={busy} onClick={() => setDialog({ mode: 'rename', pageId: current.id, name: current.name })}>改名</button>
       <button disabled={busy || index <= 0} onClick={() => onReorder(current.id, -1)}>上移</button>
       <button disabled={busy || index >= (album?.pages.length ?? 0) - 1} onClick={() => onReorder(current.id, 1)}>下移</button>
       <button disabled={busy} onClick={() => onDelete(current.id)}>删除画布</button></div>
       <div className="page-details"><h3>当前画布</h3><dl><div><dt>纸张</dt><dd>A4</dd></div><div><dt>编辑方向</dt><dd>{canvas?.document.orientation === 'landscape' ? '横版' : '竖版'}</dd></div>
-        <div><dt>页码</dt><dd>{index + 1}</dd></div><div><dt>图片</dt><dd>{canvas?.document.objects.length ?? 0} 张</dd></div></dl></div></>}
+        <div><dt>页码</dt><dd>{index + 1}</dd></div><div><dt>对象</dt><dd>{canvas?.document.objects.length ?? 0} 个</dd></div></dl></div></>}
     {!!canvas?.warnings.length && <div className="page-warning" role="status">{canvas.warnings.join('\n')}</div>}
-    <div className="panel-footer">{canvas?.dirty ? '位置、尺寸或方向尚未保存' : current ? '右击图片名称可调整大小' : '尚未创建画布'}</div>
+    <div className="panel-footer">{canvas?.dirty ? '当前画布有未保存修改' : current ? '右击对象可编辑或调整大小' : '尚未创建画布'}</div>
     {dialog && <PageDialog mode={dialog.mode} name={dialog.name} busy={busy} onClose={() => setDialog(null)}
       onSubmit={(name, orientation) => dialog.mode === 'create' ? onCreate(name, orientation) : onRename(dialog.pageId, name)} />}
     {menu && createPortal(<div className="image-context-menu" ref={menuRef} role="menu" aria-label="图片操作" style={{ left: menu.x, top: menu.y }}>
-      <button type="button" role="menuitem" disabled={busy} onClick={() => { setSizeObject(menu.object); setMenu(null); }}>调整图片大小…</button>
+      <button type="button" role="menuitem" disabled={busy} onClick={() => { setSizeObject(menu.object); setMenu(null); }}>调整{menu.object.kind === 'image' ? '图片' : '文字'}大小…</button>
+      {menu.object.kind === 'text' && <button type="button" role="menuitem" disabled={busy} onClick={() => { if (menu.object.kind === 'text') onEditText(menu.object); setMenu(null); }}>编辑文字…</button>}
+      <button type="button" role="menuitem" disabled={busy} onClick={() => { void onRotate(menu.object.id, menu.object.rotation + 90); setMenu(null); }}>顺时针旋转 90°</button>
+      <button type="button" role="menuitem" disabled={busy} onClick={() => { void onRotate(menu.object.id, menu.object.rotation - 90); setMenu(null); }}>逆时针旋转 90°</button>
     </div>, document.body)}
-    {sizeObject && canvas && <ImageSizeDialog object={sizeObject} orientation={canvas.document.orientation} busy={busy}
+    {sizeObject && canvas && <ImageSizeDialog object={sizeObject} busy={busy}
       onClose={() => setSizeObject(null)} onSubmit={geometry => onResize(sizeObject.id, geometry)} />}
   </aside>;
 }

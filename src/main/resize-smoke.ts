@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import type { AlbumState } from '../shared/album';
 import type { ImageObject, ResizeHandle } from '../shared/canvas';
-import { resizeHandles } from '../shared/canvas';
+import { resizeHandles, rotateVector } from '../shared/canvas';
 
 /** 等待界面状态及绘制提交，不依赖文件复制速度。 */
 async function waitFor(window: BrowserWindow, expression: string): Promise<void> {
@@ -78,9 +78,9 @@ export async function runResizeSmoke(window: BrowserWindow, output: string, albu
   console.log('缩放验收：开始八点指针检查。');
   const state = async (): Promise<AlbumState> => window.webContents.executeJavaScript('window.desktop.getAlbumState()');
   const start = await state();
-  const albumId = start.album!.id; const pageId = start.canvas!.pageId; const original = start.canvas!.document.objects[0]!;
+  const albumId = start.album!.id; const pageId = start.canvas!.pageId; const original = start.canvas!.document.objects[0]! as ImageObject;
   const id = original.id;
-  const current = async (): Promise<ImageObject> => (await state()).canvas!.document.objects.find(item => item.id === id)!;
+  const current = async (): Promise<ImageObject> => (await state()).canvas!.document.objects.find((item): item is ImageObject => item.kind === 'image' && item.id === id)!;
   const directory = start.album!.pages.find(page => page.id === pageId)!.directoryName;
   const file = join(albumRoot, 'pages', directory, original.fileName);
   const originalBytes = await readFile(file);
@@ -168,18 +168,21 @@ export async function runResizeSmoke(window: BrowserWindow, output: string, albu
   for (const orientation of ['portrait', 'landscape'] as const) {
     await reset(orientation);
     for (const handle of resizeHandles) {
-      const before = await current(); const old = await bounds(window);
+      const before = await current();
       const sx = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
       const sy = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
-      await dragHandle(window, handle, sx * 18, sy * 12);
-      const after = await current(); const next = await bounds(window);
+      const delta = rotateVector(sx * 18, sy * 12, before.rotation - (orientation === 'landscape' ? 90 : 0));
+      await dragHandle(window, handle, Math.round(delta.x), Math.round(delta.y));
+      const after = await current();
       if (sx && sy) assert(Math.abs(after.widthMm / after.heightMm - before.widthMm / before.heightMm) < 1e-9, handle);
       else {
-        if (sx) assert(Math.abs(next.height - old.height) < 0.1, handle);
-        if (sy) assert(Math.abs(next.width - old.width) < 0.1, handle);
+        if (sx) assert(Math.abs(after.heightMm - before.heightMm) < 0.01, handle);
+        if (sy) assert(Math.abs(after.widthMm - before.widthMm) < 0.01, handle);
       }
-      if (sx) assert(Math.abs((sx < 0 ? next.x + next.width : next.x) - (sx < 0 ? old.x + old.width : old.x)) < 0.15, handle);
-      if (sy) assert(Math.abs((sy < 0 ? next.y + next.height : next.y) - (sy < 0 ? old.y + old.height : old.y)) < 0.15, handle);
+      const oldAnchor = rotateVector(-sx * before.widthMm / 2, -sy * before.heightMm / 2, before.rotation);
+      const nextAnchor = rotateVector(-sx * after.widthMm / 2, -sy * after.heightMm / 2, after.rotation);
+      assert(Math.abs(before.xMm + before.widthMm / 2 + oldAnchor.x - after.xMm - after.widthMm / 2 - nextAnchor.x) < .01, handle);
+      assert(Math.abs(before.yMm + before.heightMm / 2 + oldAnchor.y - after.yMm - after.heightMm / 2 - nextAnchor.y) < .01, handle);
       assert.equal(after.rotation, before.rotation); assert.equal(after.zIndex, before.zIndex); assert.equal(after.fileName, before.fileName);
       assert((await state()).canvas!.dirty);
     }
@@ -194,10 +197,8 @@ export async function runResizeSmoke(window: BrowserWindow, output: string, albu
   await dragHandle(window, 'se', 35, 20, true);
   assert.deepEqual((await state()).canvas!.document, beforeCancel);
   const canceledBounds = await bounds(window); assert(Math.abs(canceledBounds.width - beforeCancelBounds.width) < 0.1);
-  await dragHandle(window, 'e', -350, 0);
-  const minimum = await bounds(window);
-  const scale = await window.webContents.executeJavaScript('Number(document.querySelector("[data-zoom-value]").dataset.zoomValue) * 96 / 25.4');
-  assert(Math.abs(minimum.width / scale - 1) < 0.02);
+  await dragHandle(window, 'e', 0, 350);
+  assert(Math.abs((await current()).widthMm - 1) < 0.02);
 
   await reset('landscape');
   await window.webContents.executeJavaScript(`window.desktop.addPageImage(${JSON.stringify(albumId)}, ${JSON.stringify(pageId)}, '方向照片.jpg')`);
@@ -214,7 +215,7 @@ export async function runResizeSmoke(window: BrowserWindow, output: string, albu
   await fill(window, 'image-length', '70'); await fill(window, 'image-width', '40');
   await window.webContents.executeJavaScript("document.querySelector('.image-size-dialog button[type=submit]').click()");
   await waitFor(window, "!document.querySelector('.image-size-dialog') && !document.querySelector('.add-page').disabled");
-  const free = await current(); assert.equal(free.widthMm, 40); assert.equal(free.heightMm, 70);
+  const free = await current(); assert.equal(free.widthMm, 70); assert.equal(free.heightMm, 40);
   assert(Math.abs(free.xMm + free.widthMm / 2 - beforeSize.xMm - beforeSize.widthMm / 2) < 1e-8);
   assert(Math.abs(free.yMm + free.heightMm / 2 - beforeSize.yMm - beforeSize.heightMm / 2) < 1e-8);
   assert.equal(free.zIndex, original.zIndex);
@@ -232,7 +233,7 @@ export async function runResizeSmoke(window: BrowserWindow, output: string, albu
   await capture(window, join(output, 'resize-size-dialog.png'));
   await window.webContents.executeJavaScript("document.querySelector('.image-size-dialog button[type=submit]').click()");
   await waitFor(window, "!document.querySelector('.image-size-dialog') && !document.querySelector('.add-page').disabled");
-  const proportional = await current(); assert.equal(proportional.widthMm, 80); assert.equal(proportional.heightMm, 140);
+  const proportional = await current(); assert.equal(proportional.widthMm, 140); assert.equal(proportional.heightMm, 80);
   await window.webContents.executeJavaScript('window.desktop.savePage()');
   const canvasFile = join(albumRoot, 'pages', directory, 'canvas.json');
   assert.deepEqual(JSON.parse(await readFile(canvasFile, 'utf8')).objects.find((item: ImageObject) => item.id === id), proportional);

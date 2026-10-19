@@ -1,27 +1,58 @@
-/** 文件用途：定义正式页面、图片对象及毫米基础坐标与编辑视角的换算。 */
+/** 文件用途：定义页面与图片/文字联合模型、固定文字排版区及任意角度的毫米坐标换算。 */
 import type { Orientation } from './framework';
 
-export interface ImageObject {
-  id: string;
-  kind: 'image';
-  fileName: string;
-  sourceName: string;
+export interface ObjectGeometry {
   xMm: number;
   yMm: number;
   widthMm: number;
   heightMm: number;
-  rotation: 0 | 90 | 180 | 270;
+}
+
+export interface ObjectBase extends ObjectGeometry {
+  id: string;
+  rotation: number;
   zIndex: number;
 }
 
+export interface ImageObject extends ObjectBase {
+  kind: 'image';
+  fileName: string;
+  sourceName: string;
+}
+
+export type WritingMode = 'horizontal' | 'vertical';
+export interface TextDraft {
+  text: string;
+  writingMode: WritingMode;
+  fontFamily: string;
+  fontSizePt: number;
+  color: string;
+  letterSpacingPt: number;
+  lineSpacing: number;
+  columns: number;
+  columnGapMm: number;
+  widthMm: number;
+  heightMm: number;
+}
+
+/** 固定排版区域与最终显示尺寸分开，等比缩放只改变后者，不重新换行或换列。 */
+export interface TextObject extends ObjectBase, Omit<TextDraft, 'widthMm' | 'heightMm'> {
+  kind: 'text';
+  layoutWidthMm: number;
+  layoutHeightMm: number;
+}
+
+export type CanvasObject = ImageObject | TextObject;
+export interface TextFont { family: string; label: string; available: boolean }
+
 /** 所有对象均使用竖向 A4 基础坐标；orientation 只控制整页编辑视角。 */
 export interface CanvasDocument {
-  formatVersion: 1;
+  formatVersion: 1 | 2;
   widthMm: 210;
   heightMm: 297;
   orientation: Orientation;
   nextImageNumber: number;
-  objects: ImageObject[];
+  objects: CanvasObject[];
 }
 
 export interface CanvasSnapshot {
@@ -31,40 +62,50 @@ export interface CanvasSnapshot {
   warnings: string[];
 }
 
-export type ImageGeometry = Pick<ImageObject, 'xMm' | 'yMm' | 'widthMm' | 'heightMm'>;
+export type ImageGeometry = ObjectGeometry;
 export interface ImageViewBox { x: number; y: number; width: number; height: number }
 export type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 export const resizeHandles: readonly ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
 export const assetDragType = 'application/x-album-asset';
+export const textDragType = 'application/x-album-text';
 export const mmToPixels = 96 / 25.4;
 
-/** 对象角度与整页视角合并后，仅 90°/270°交换可见宽高；不改写对象自身角度。 */
-function swapsViewAxes(object: ImageObject, orientation: Orientation): boolean {
-  return (object.rotation + (orientation === 'landscape' ? 270 : 0)) % 180 !== 0;
+/** 保存角度归一化，避免跨过 0° 时丢失旋转方向；预览可使用连续角度。 */
+export function normalizeAngle(angle: number): number { return ((angle % 360) + 360) % 360; }
+
+/** 二维向量按顺时针角度旋转，屏幕与纸张的 y 轴都向下。 */
+export function rotateVector(x: number, y: number, angle: number): { x: number; y: number } {
+  const radians = angle * Math.PI / 180;
+  return { x: x * Math.cos(radians) - y * Math.sin(radians), y: x * Math.sin(radians) + y * Math.cos(radians) };
 }
 
-/** 返回当前画布视角中的外接矩形，单位毫米，用于控制点与尺寸对话框。 */
-export function imageViewBox(object: ImageObject, orientation: Orientation): ImageViewBox {
+/** 当前视角的对象中心及角度，供独立选框使用；长宽始终是对象自身尺寸。 */
+export function objectView(object: ObjectBase, orientation: Orientation): { x: number; y: number; angle: number } {
   const cx = object.xMm + object.widthMm / 2;
   const cy = object.yMm + object.heightMm / 2;
-  const swapped = swapsViewAxes(object, orientation);
-  const width = swapped ? object.heightMm : object.widthMm;
-  const height = swapped ? object.widthMm : object.heightMm;
-  const centerX = orientation === 'portrait' ? cx : cy;
-  const centerY = orientation === 'portrait' ? cy : 210 - cx;
-  return { x: centerX - width / 2, y: centerY - height / 2, width, height };
+  return { x: orientation === 'portrait' ? cx : cy, y: orientation === 'portrait' ? cy : 210 - cx,
+    angle: object.rotation - (orientation === 'landscape' ? 90 : 0) };
 }
 
-/** 可见矩形反算为竖向基础坐标；图片角度及文件引用保持原值。 */
-export function geometryFromViewBox(object: ImageObject, orientation: Orientation, box: ImageViewBox): ImageGeometry {
-  const swapped = swapsViewAxes(object, orientation);
-  const widthMm = swapped ? box.height : box.width;
-  const heightMm = swapped ? box.width : box.height;
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-  return { xMm: (orientation === 'portrait' ? cx : 210 - cy) - widthMm / 2,
-    yMm: (orientation === 'portrait' ? cy : cx) - heightMm / 2, widthMm, heightMm };
+/** 右侧名称只作显示，文字不消耗图片文件编号。 */
+export function objectLabel(object: CanvasObject): string {
+  return object.kind === 'image' ? object.sourceName : `${object.writingMode === 'horizontal' ? '横排' : '竖排'}文字：${object.text.replace(/\s+/gu, ' ').slice(0, 28)}`;
+}
+
+/** 对象自身尺寸以中心为锚点调整；文字比例由主进程再次校验。 */
+export function centeredGeometry(object: ObjectBase, widthMm: number, heightMm: number): ObjectGeometry {
+  return { xMm: object.xMm + (object.widthMm - widthMm) / 2, yMm: object.yMm + (object.heightMm - heightMm) / 2, widthMm, heightMm };
+}
+
+/** 屏幕位移依次撤销查看比例、整页旋转及对象旋转，固定对象局部的对角或对边。 */
+export function resizeObjectGeometry(object: ObjectBase, handle: ResizeHandle, dx: number, dy: number, zoom: number, orientation: Orientation): ObjectGeometry {
+  const paper = screenDeltaToPaper(dx, dy, zoom, orientation);
+  const local = rotateVector(paper.x, paper.y, -object.rotation);
+  const next = resizeViewBox({ x: 0, y: 0, width: object.widthMm, height: object.heightMm }, handle, local.x, local.y);
+  const shift = rotateVector(next.x + (next.width - object.widthMm) / 2, next.y + (next.height - object.heightMm) / 2, object.rotation);
+  return { xMm: object.xMm + object.widthMm / 2 + shift.x - next.width / 2,
+    yMm: object.yMm + object.heightMm / 2 + shift.y - next.height / 2, widthMm: next.width, heightMm: next.height };
 }
 
 /** 八点缩放：角点沿原矩形对角线投影并锁比例，边点仅改变对应轴，对角/对边固定。 */
@@ -76,7 +117,7 @@ export function resizeViewBox(box: ImageViewBox, handle: ResizeHandle, dx: numbe
   if (sx && sy) {
     const scale = Math.max(Math.max(1 / width, 1 / height), Math.min(Math.min(100000 / width, 100000 / height),
       1 + (sx * width * dx + sy * height * dy) / (width * width + height * height)));
-    width *= scale; height *= scale;
+    width = Math.max(1, Math.min(100000, width * scale)); height = Math.max(1, Math.min(100000, height * scale));
   } else {
     if (sx) width = Math.max(1, Math.min(100000, width + sx * dx));
     if (sy) height = Math.max(1, Math.min(100000, height + sy * dy));

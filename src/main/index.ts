@@ -10,10 +10,12 @@ import { AlbumController } from './album-ipc';
 import { declareImageProtocol, installImageProtocol } from './image-validator';
 import { runAlbumSmoke } from './album-smoke';
 import { runPageSmoke } from './page-smoke';
+import { runTextSmoke } from './text-smoke';
 
 declareImageProtocol();
 
-const smokeMode = !app.isPackaged && process.argv.includes('--framework-smoke');
+const textSmoke = !app.isPackaged && process.argv.includes('--text-smoke');
+const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke);
 const projectRoot = join(__dirname, '../..');
 const rendererFile = join(__dirname, '../renderer/index.html');
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined;
@@ -179,6 +181,10 @@ async function bootstrap(): Promise<void> {
   mainWindow.on('closed', () => { mainWindow = null; });
   await loadRenderer(mainWindow);
   if (smokeMode) {
+    if (textSmoke) {
+      await runTextSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
+      app.quit(); return;
+    }
     await runFrameworkSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), exportSamplePdf);
     await runAlbumSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
     await runPageSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);

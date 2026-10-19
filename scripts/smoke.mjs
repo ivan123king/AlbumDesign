@@ -8,7 +8,7 @@ const electron = require('electron');
 const root = fileURLToPath(new URL('../', import.meta.url));
 const environment = { ...process.env };
 delete environment.ELECTRON_RUN_AS_NODE;
-const child = spawn(electron, [root, '--framework-smoke'], {
+const child = spawn(electron, [root, process.argv.includes('--text') ? '--text-smoke' : '--framework-smoke'], {
   cwd: root, env: environment, stdio: 'inherit', windowsHide: true
 });
 const timer = setTimeout(() => {

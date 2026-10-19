@@ -4,12 +4,13 @@ import type { CSSProperties } from 'react';
 import { getPageSize } from '../../shared/framework';
 import type { AppInfo, Orientation } from '../../shared/framework';
 import type { AlbumResult, AlbumState } from '../../shared/album';
-import { mmToPixels } from '../../shared/canvas';
-import type { ImageGeometry } from '../../shared/canvas';
+import { mmToPixels, textDragType } from '../../shared/canvas';
+import type { ImageGeometry, TextDraft, TextFont, TextObject, WritingMode } from '../../shared/canvas';
 import { PanelDivider } from './components/PanelDivider';
 import { AssetsPanel } from './components/AssetsPanel';
 import { CanvasEditor } from './components/CanvasEditor';
 import { PagesPanel } from './components/PagesPanel';
+import { TextDialog } from './components/TextDialog';
 
 /** 主进程保存当前页草稿；局部拖动帧由图片组件处理，主界面接收结束后的坐标。 */
 export function App(): React.JSX.Element {
@@ -24,6 +25,8 @@ export function App(): React.JSX.Element {
   const [interacting, setInteracting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selection, setSelection] = useState<{ kind: 'page' | 'image'; id: string } | null>(null);
+  const [fonts, setFonts] = useState<TextFont[]>([]);
+  const [textEditor, setTextEditor] = useState<{ object: TextObject | null; mode: WritingMode; position?: { xMm: number; yMm: number } } | null>(null);
   const workspace = useRef<HTMLDivElement>(null);
   const localLock = useRef(false);
   const albumId = state.album?.id;
@@ -46,9 +49,10 @@ export function App(): React.JSX.Element {
     };
     const unsubscribe = window.desktop.onAlbumState(receive);
     void window.desktop.getAlbumState().then(receive).catch(() => { if (!disposed) setMessage('画册接口连接失败。'); });
+    void window.desktop.getTextFonts().then(value => { if (!disposed) setFonts(value); }).catch(() => { if (!disposed) setMessage('无法读取可用字体。'); });
     return () => { disposed = true; unsubscribe(); };
   }, []);
-  useEffect(() => { setSelection(pageId ? { kind: 'page', id: pageId } : null); }, [albumId, pageId]);
+  useEffect(() => { setSelection(pageId ? { kind: 'page', id: pageId } : null); setTextEditor(null); }, [albumId, pageId]);
   useEffect(() => {
     if (selectedId && !state.canvas?.document.objects.some(object => object.id === selectedId)) setSelection(pageId ? { kind: 'page', id: pageId } : null);
   }, [state.canvas, selectedId, pageId]);
@@ -80,12 +84,26 @@ export function App(): React.JSX.Element {
   /** 选择属于编辑状态，位置和尺寸始终来自正式页面模型。 */
   const selectObject = useCallback((id: string | null): void => { setSelection(id ? { kind: 'image', id } : null); }, []);
   const moveObject = useCallback((id: string, xMm: number, yMm: number): void => {
-    if (albumId && pageId) void execute(() => window.desktop.movePageImage(albumId, pageId, id, xMm, yMm), '图片位置已修改，请保存。');
+    if (albumId && pageId) void execute(() => window.desktop.movePageObject(albumId, pageId, id, xMm, yMm), '对象位置已修改，请保存。');
   }, [albumId, pageId, execute]);
   /** 控制点和尺寸表单共用一次几何提交；尺寸修改与移动一样进入手动保存草稿。 */
   const resizeObject = useCallback((id: string, geometry: ImageGeometry): Promise<boolean> => {
-    return albumId && pageId ? execute(() => window.desktop.resizePageImage(albumId, pageId, id, geometry), '图片大小已修改，请保存。') : Promise.resolve(false);
+    return albumId && pageId ? execute(() => window.desktop.resizePageObject(albumId, pageId, id, geometry), '对象大小已修改，请保存。') : Promise.resolve(false);
   }, [albumId, pageId, execute]);
+  const rotateObject = useCallback((id: string, angle: number): Promise<boolean> => {
+    return albumId && pageId ? execute(() => window.desktop.rotatePageObject(albumId, pageId, id, angle), '对象角度已修改，请保存。') : Promise.resolve(false);
+  }, [albumId, pageId, execute]);
+  const editText = useCallback((object: TextObject): void => { setTextEditor({ object, mode: object.writingMode }); }, []);
+
+  /** 确认表单才创建/更新文字，选中真实返回 ID，文本内容从不写入图片目录。 */
+  function submitText(draft: TextDraft): Promise<boolean> {
+    if (!albumId || !pageId || !textEditor) return Promise.resolve(false);
+    return execute(async () => {
+      const result = await window.desktop.putPageText(albumId, pageId, textEditor.object?.id ?? null, draft, textEditor.position);
+      if (result.status === 'success') setSelection({ kind: 'image', id: result.value });
+      return result;
+    }, '文字已更新，请保存。');
+  }
   useEffect(() => {
     /** Delete 仅在画布或页面对象区域生效，输入框和素材树不触发真实文件删除。 */
     const onKey = (event: KeyboardEvent): void => {
@@ -93,7 +111,7 @@ export function App(): React.JSX.Element {
       if (event.key !== 'Delete' || busy || !albumId || !pageId || !selection || document.querySelector('dialog[open]')
         || target?.closest('input, textarea, select, [contenteditable=true]') || !target?.closest('.canvas-panel, .pages-panel')) return;
       event.preventDefault();
-      if (selection.kind === 'image') void execute(() => window.desktop.deletePageImage(albumId, pageId, selection.id), '图片及本页副本已删除。');
+      if (selection.kind === 'image') void execute(() => window.desktop.deletePageObject(albumId, pageId, selection.id), '选中对象已删除。');
       else void execute(() => window.desktop.deletePage(albumId, selection.id), '画布已删除，页码已更新。');
     };
     document.addEventListener('keydown', onKey);
@@ -128,7 +146,10 @@ export function App(): React.JSX.Element {
       <button disabled={!ready || busy} onClick={() => { void execute(() => window.desktop.openAlbum(), '画册已打开。'); }}>打开画册</button>
       <button disabled={busy || !state.canvas?.dirty} data-save-page onClick={() => { void execute(() => window.desktop.savePage(), '当前画布已保存。'); }}>保存</button></div>
       <span className="toolbar-divider" /><div className="toolbar-group"><span className="toolbar-instruction">从左侧拖入图片</span>
-        <button disabled title="文字排版将在后续阶段接入">横排文字</button><button disabled title="文字排版将在后续阶段接入">竖排文字</button></div>
+        {(['horizontal', 'vertical'] as const).map(mode => <button key={mode} data-add-text={mode} draggable={!!pageId && !busy}
+          disabled={!pageId || busy} onClick={() => setTextEditor({ object: null, mode })} title="点击添加，或拖到画布指定位置"
+          onDragStart={event => { event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData(textDragType, mode); }}>
+          {mode === 'horizontal' ? '横排文字' : '竖排文字'}</button>)}</div>
       <div className="toolbar-note">手工排版 · 自由记录</div></nav>
     <main className="editor-layout"><AssetsPanel state={{ ...state, busy }} onMessage={setMessage} />
       <PanelDivider side="left" width={leftWidth} onChange={setLeftWidth} />
@@ -141,10 +162,12 @@ export function App(): React.JSX.Element {
             <div className="scaled-page" style={{ width: size.width * mmToPixels * zoom, height: size.height * mmToPixels * zoom }}>
               <div className="canvas-view" style={{ width: `${size.width}mm`, height: `${size.height}mm`, transform: `scale(${zoom})`, transformOrigin: 'top left' }}>
                 <CanvasEditor key={`${albumId}/${pageId}`} canvas={state.canvas} albumId={albumId} zoom={zoom} busy={busy} selectedId={selectedId}
-                  onSelect={selectObject} onMove={moveObject} onResize={resizeObject} onInteraction={setInteracting} onMessage={setMessage} onDropAsset={path => {
+                  onSelect={selectObject} onMove={moveObject} onResize={resizeObject} onRotate={rotateObject} onEditText={editText}
+                  onDropText={(mode, position) => setTextEditor({ object: null, mode, position })}
+                  onInteraction={setInteracting} onMessage={setMessage} onDropAsset={path => {
                     if (pageId) void execute(() => window.desktop.addPageImage(albumId, pageId, path), '图片已加入当前画布并保存，可选中后拖动位置。');
                   }} /></div></div>
-            <div className="canvas-hint">四角等比例 · 边中点拉伸 · 右击图片名调整尺寸</div></>
+            <div className="canvas-hint">四角等比例 · 按住顶部图标旋转 · 双击文字编辑</div></>
             : <div className="no-page" data-no-page><span aria-hidden="true">▱</span><h2>{state.album ? '创建第一张画布' : '开始制作你的画册'}</h2>
               <p>{state.album ? '点击右侧“新建画布”，再从左侧拖入图片。' : '先新建或打开画册，再创建 A4 画布。'}</p></div>}
         </div></div>
@@ -153,7 +176,8 @@ export function App(): React.JSX.Element {
           <button aria-label="放大画布" data-zoom-in disabled={interacting} onClick={() => setZoom(value => Math.min(2, value + 0.1))}>＋</button>
           <span className="toolbar-divider" /><button data-fit-page disabled={!pageId || interacting} onClick={fitPage}>适应窗口</button></div></div>
       </section><PanelDivider side="right" width={rightWidth} onChange={setRightWidth} />
-      <PagesPanel state={{ ...state, busy }} selectedId={selectedId} onResize={resizeObject} onSelectObject={id => setSelection({ kind: 'image', id })}
+      <PagesPanel state={{ ...state, busy }} selectedId={selectedId} onResize={resizeObject} onRotate={rotateObject} onEditText={editText}
+        onSelectObject={id => setSelection({ kind: 'image', id })}
         onSelectPage={id => {
           if (id === pageId) setSelection({ kind: 'page', id });
           else if (albumId) void execute(() => window.desktop.selectPage(albumId, id), '画布已切换。');
@@ -162,5 +186,6 @@ export function App(): React.JSX.Element {
         onReorder={(id, direction) => { if (albumId) void execute(() => window.desktop.reorderPage(albumId, id, direction), '页序已更新，固定目录编号保持。'); }}
         onDelete={id => { if (albumId) void execute(() => window.desktop.deletePage(albumId, id), '画布已删除，页码已更新。'); }} />
     </main><footer className="status-bar"><span className="status-message" role="status">{message}</span><span>本地画册 · A4</span><span>v{info?.version ?? '—'}</span></footer>
+    {textEditor && <TextDialog object={textEditor.object} mode={textEditor.mode} fonts={fonts} busy={busy} onSubmit={submitText} onClose={() => setTextEditor(null)} />}
   </div>;
 }

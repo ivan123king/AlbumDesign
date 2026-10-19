@@ -13,6 +13,7 @@
     "build": "npm run typecheck && electron-vite build",
     "start": "electron-vite preview",
     "smoke": "npm run build && node scripts/smoke.mjs",
+    "smoke:text": "npm run build && node scripts/smoke.mjs --text",
     "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {
