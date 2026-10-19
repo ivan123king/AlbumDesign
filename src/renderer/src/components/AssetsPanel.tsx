@@ -1,6 +1,7 @@
-/** 文件用途：显示素材目录与按需缩略图，处理单张预览、分组、批量导入及结果反馈。 */
-import { useEffect, useRef, useState } from 'react';
-import type { DragEvent, FormEvent } from 'react';
+/** 文件用途：显示素材目录与缩略图，处理预览、分组、导入、右键删除及反馈。 */
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import type { DragEvent, FormEvent, MouseEvent } from 'react';
 import type { AlbumState, AssetEntry, ImportReport } from '../../../shared/album';
 import { assetDragType } from '../../../shared/canvas';
 import { AssetPreview } from './AssetPreview';
@@ -54,8 +55,33 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
   const [preview, setPreview] = useState<{ albumId: string; path: string } | null>(null);
   const [view, setView] = useState<'directory' | 'gallery'>('directory');
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [menu, setMenu] = useState<{ albumId: string; path: string; kind: AssetEntry['kind']; x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const scrollRoot = useRef<HTMLDivElement>(null);
   const locked = busy || localPending;
+
+  useEffect(() => { setMenu(null); }, [album?.id, album?.assets, locked, view]);
+  /** 浮层不受素材滚动容器裁切，并按窗口边界限制位置。 */
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return;
+    const bounds = menuRef.current.getBoundingClientRect();
+    menuRef.current.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - bounds.width - 8))}px`;
+    menuRef.current.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - bounds.height - 8))}px`;
+  }, [menu]);
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector('button')?.focus({ preventScroll: true });
+    /** 点击外部、Escape、滚动、失焦或缩放窗口时关闭，避免菜单指向过期条目。 */
+    const dismiss = (): void => setMenu(null);
+    const pointer = (event: globalThis.PointerEvent): void => { if (!menuRef.current?.contains(event.target as Node)) dismiss(); };
+    const key = (event: KeyboardEvent): void => { if (event.key === 'Escape') { event.preventDefault(); dismiss(); } };
+    document.addEventListener('pointerdown', pointer, true); document.addEventListener('keydown', key);
+    window.addEventListener('blur', dismiss); window.addEventListener('scroll', dismiss, true); window.addEventListener('resize', dismiss);
+    return () => {
+      document.removeEventListener('pointerdown', pointer, true); document.removeEventListener('keydown', key);
+      window.removeEventListener('blur', dismiss); window.removeEventListener('scroll', dismiss, true); window.removeEventListener('resize', dismiss);
+    };
+  }, [menu]);
 
   useEffect(() => {
     setSelectedPath('');
@@ -74,6 +100,40 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
     }
     if (!exists(album.assets)) setSelectedPath('');
   }, [album, selectedPath]);
+
+  useEffect(() => {
+    if (!preview || !album) return;
+    /** 素材被删除或外部移走后关闭原图，卸载时由预览组件释放租约。 */
+    function exists(entries: AssetEntry[]): boolean {
+      return entries.some(entry => entry.kind === 'image' ? entry.path === preview?.path : exists(entry.children));
+    }
+    if (!exists(album.assets)) setPreview(null);
+  }, [album, preview]);
+
+  /** 两种素材视图共用菜单，始终操作被右击的条目，不依赖当前导入分组。 */
+  function showMenu(event: MouseEvent<HTMLDivElement>, entry: Pick<AssetEntry, 'path' | 'kind'>): void {
+    event.preventDefault(); event.stopPropagation();
+    if (album && !locked) setMenu({ albumId: album.id, path: entry.path, kind: entry.kind, x: event.clientX, y: event.clientY });
+  }
+
+  /** 主进程负责确认与删除；取消不更改浏览状态，成功清理被移除分组的展开记录。 */
+  async function deleteEntry(): Promise<void> {
+    if (!menu || !album || menu.albumId !== album.id || locked) return;
+    const target = menu;
+    setMenu(null); setLocalPending(true);
+    try {
+      const result = await window.desktop.deleteAsset(album.id, target.path, target.kind);
+      if (result.status === 'success') {
+        if (target.kind === 'directory') setExpanded(previous => new Set([...previous].filter(path => path !== target.path && !path.startsWith(`${target.path}/`))));
+        setReport(null);
+        onMessage(`已删除${target.kind === 'directory' ? '素材分组' : '素材'}：${target.path}；已有画布中的图片不受影响。`);
+      } else if (result.status === 'error') onMessage(`删除失败：${result.message}`);
+      else onMessage('已取消删除素材');
+      // 删除失败也可能已经撤销预览租约，让仍存在的卡片重新请求。
+      if (result.status !== 'canceled') setRefreshVersion(value => value + 1);
+    } catch { onMessage('桌面接口连接失败，请重试。'); }
+    finally { setLocalPending(false); }
+  }
 
   /** 展开只影响浏览，不改变导入位置；点击目录名称才选择目标。 */
   function toggle(path: string): void {
@@ -143,7 +203,7 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
   function renderEntries(entries: AssetEntry[]): React.JSX.Element {
     return <ul className="asset-tree">{entries.map(entry => <li key={entry.path}>
       {entry.kind === 'directory' ? <>
-        <div className={`asset-directory ${selectedPath === entry.path ? 'selected' : ''}`}>
+        <div className={`asset-directory ${selectedPath === entry.path ? 'selected' : ''}`} onContextMenu={event => showMenu(event, entry)}>
           <button className="asset-toggle" aria-label={`${expanded.has(entry.path) ? '折叠' : '展开'} ${entry.name}`}
             aria-expanded={expanded.has(entry.path)} disabled={locked} onClick={() => toggle(entry.path)}>
             {expanded.has(entry.path) ? '▾' : '▸'}</button>
@@ -154,6 +214,7 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
         </div>
         {expanded.has(entry.path) && (entry.children.length ? renderEntries(entry.children) : <p className="asset-folder-empty">空分组</p>)}
       </> : <div className="asset-file" title={`双击预览，或拖入当前画布：${entry.path}`} data-asset-file={entry.path} draggable={!locked}
+        onContextMenu={event => showMenu(event, entry)}
         role="button" tabIndex={locked ? -1 : 0} aria-label={`预览 ${entry.name}`} aria-disabled={locked}
         onDoubleClick={() => { if (album && !locked) setPreview({ albumId: album.id, path: entry.path }); }}
         onKeyDown={event => {
@@ -194,7 +255,7 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
       {album?.assets.length ? (view === 'directory' ? renderEntries(album.assets) : <AssetGallery
         key={`${album.id}:${selectedPath}:${refreshVersion}`} albumId={album.id} entries={album.assets} selectedPath={selectedPath}
         scrollRoot={scrollRoot} locked={locked} onSelectDirectory={path => { setSelectedPath(path); if (scrollRoot.current) scrollRoot.current.scrollTop = 0; }}
-        onPreview={path => setPreview({ albumId: album.id, path })} onDragAsset={dragAsset} />) : <div className="asset-empty"><div className="empty-symbol" aria-hidden="true">▧</div>
+        onPreview={path => setPreview({ albumId: album.id, path })} onDragAsset={dragAsset} onContextMenu={showMenu} />) : <div className="asset-empty"><div className="empty-symbol" aria-hidden="true">▧</div>
         <strong>这里还没有图片</strong><p>{album ? '导入 JPEG、PNG 图片，或新建分组。' : <>新建或打开画册后，<br />在这里管理你的素材。</>}</p></div>}
     </div>
     {!!album?.warnings.length && <details className="asset-notice"><summary>目录提示（{album.warnings.length}）</summary>
@@ -206,6 +267,11 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
         {report.warnings.map((warning, index) => <li key={`warning-${index}`} className="import-failure">{warning}</li>)}</ul>
     </details>}
     <div className="panel-footer">{album ? '素材已直接保存到画册目录' : '素材将保存在画册的 assets 目录'}</div>
+    {menu && createPortal(<div className="image-context-menu" ref={menuRef} role="menu" aria-label="素材操作" data-asset-context-menu
+      style={{ left: menu.x, top: menu.y }} onContextMenu={event => event.preventDefault()}>
+      <button type="button" role="menuitem" disabled={locked} data-delete-asset onClick={() => { void deleteEntry(); }}>
+        {menu.kind === 'directory' ? '删除分组' : '删除素材'}</button>
+    </div>, document.body)}
     {creatingGroup && <GroupDialog busy={locked} target={selectedPath} onCreate={createGroup} onClose={() => setCreatingGroup(false)} />}
     {preview && preview.albumId === album?.id && <AssetPreview key={`${preview.albumId}:${preview.path}`}
       albumId={preview.albumId} path={preview.path} onClose={() => setPreview(null)} />}

@@ -13,13 +13,19 @@ import { runPageSmoke } from './page-smoke';
 import { runTextSmoke } from './text-smoke';
 import { runLayerSmoke } from './layer-smoke';
 import { runAssetPreviewSmoke } from './asset-preview-smoke';
+import { AppDataStore } from './app-data';
+import { runRecentAlbumSmoke } from './recent-album-smoke';
+import { runAssetDeleteSmoke } from './asset-delete-smoke';
+import { AppDialogs } from './app-dialogs';
 
 declareImageProtocol();
 
 const textSmoke = !app.isPackaged && process.argv.includes('--text-smoke');
 const layerSmoke = !app.isPackaged && process.argv.includes('--layer-smoke');
 const assetSmoke = !app.isPackaged && process.argv.includes('--asset-preview-smoke');
-const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke || assetSmoke);
+const recentSmoke = !app.isPackaged && process.argv.includes('--recent-smoke');
+const assetDeleteSmoke = !app.isPackaged && process.argv.includes('--asset-delete-smoke');
+const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke || assetSmoke || recentSmoke || assetDeleteSmoke);
 const projectRoot = join(__dirname, '../..');
 const rendererFile = join(__dirname, '../renderer/index.html');
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined;
@@ -123,14 +129,14 @@ async function chooseSamplePdf(): Promise<SamplePdfResult> {
 }
 
 /** 安装原生菜单，画册入口及手动保存与界面共用控制器和忙碌状态。 */
-function installMenu(albums: AlbumController): void {
+function installMenu(albums: AlbumController, dialogs: AppDialogs): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: '文件', submenu: [
       { id: 'create-album', label: '新建画册…', click: () => { void albums.chooseAlbum(true); } },
       { id: 'open-album', label: '打开画册…', click: () => { void albums.chooseAlbum(false); } },
       { id: 'save-page', label: '保存', accelerator: 'CmdOrCtrl+S', enabled: false, click: () => { void albums.savePage(); } },
       { type: 'separator' },
-      { label: '导出双页 A4 样例…', click: () => {
+      { id: 'export-sample', label: '导出双页 A4 样例…', click: () => {
         void chooseSamplePdf().catch(error => dialog.showErrorBox('导出失败', String(error)));
       } },
       { type: 'separator' },
@@ -142,19 +148,34 @@ function installMenu(albums: AlbumController): void {
       { role: 'cut', label: '剪切' }, { role: 'copy', label: '复制' },
       { role: 'paste', label: '粘贴' }, { role: 'selectAll', label: '全选' }
     ] },
-    { label: '帮助', submenu: [{ label: '关于画册工坊', click: () => {
-      void dialog.showMessageBox({ type: 'info', title: '画册工坊',
-        message: '画册工坊 ' + app.getVersion(), detail: '画册编辑器框架预览：手工排版，留住每一页记忆。' });
-    } }] }
+    { label: '设置', submenu: [
+      { id: 'reopen-last-album', label: '启动时打开上次画册', type: 'checkbox', checked: true,
+        click: item => { void albums.setReopenLastAlbum(item.checked); } }
+    ] },
+    { label: '帮助', submenu: [{ id: 'about-app', label: '关于画册工坊', click: () => dialogs.showAbout() }] }
   ]));
 }
 
 /** 注册受限桌面与画册接口，后台图片校验使用独立资源协议。 */
 async function bootstrap(): Promise<void> {
-  if (!app.isPackaged) {
-    const profile = join(projectRoot, '.cache', smokeMode ? 'smoke-profile' : 'dev-profile');
-    await mkdir(profile, { recursive: true });
-    app.setPath('userData', profile);
+  // 正式目录不随产品显示名、EXE 名称或版本改变；ZIP 与安装版共用当前用户数据。
+  let profile = app.isPackaged ? join(app.getPath('appData'), 'AlbumDesign')
+    : join(projectRoot, '.cache', smokeMode ? 'smoke-profile' : 'dev-profile');
+  if (recentSmoke) {
+    const run = process.argv.find(value => value.startsWith('--recent-run='))?.slice('--recent-run='.length);
+    if (!run || !/^recent-[a-zA-Z0-9-]+$/u.test(run)) throw new Error('最近画册验收目录参数无效。');
+    profile = join(projectRoot, '.cache', 'verification', run, 'profile');
+  }
+  await mkdir(profile, { recursive: true });
+  app.setPath('userData', profile);
+  if (!smokeMode) {
+    if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+    app.on('second-instance', () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show(); mainWindow.focus();
+      }
+    });
   }
   await app.whenReady();
   installImageProtocol();
@@ -167,13 +188,18 @@ async function bootstrap(): Promise<void> {
     assertMainSender(event);
     return chooseSamplePdf();
   });
+  const appData = new AppDataStore(join(profile, 'data'));
+  const dialogs: AppDialogs = new AppDialogs(() => mainWindow, assertMainSender, (): void => albums.updateMenu());
   const albums = new AlbumController(() => {
     if (!mainWindow) throw new Error('主窗口已关闭。');
     return mainWindow;
-  }, assertMainSender);
+  }, assertMainSender, appData, dialogs);
   albums.register();
-  installMenu(albums);
+  installMenu(albums, dialogs);
   mainWindow = createWindow(smokeMode);
+  dialogs.register(mainWindow);
+  // 在渲染页面载入前占用操作锁，广播丢失也可通过初始状态查询获取结果。
+  const initialization = albums.initialize(!smokeMode || recentSmoke);
   let closeApproved = false;
   mainWindow.on('close', event => {
     if (closeApproved) return;
@@ -184,7 +210,16 @@ async function bootstrap(): Promise<void> {
   });
   mainWindow.on('closed', () => { albums.dispose(); mainWindow = null; });
   await loadRenderer(mainWindow);
+  await initialization;
   if (smokeMode) {
+    if (assetDeleteSmoke) {
+      await runAssetDeleteSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
+      app.quit(); return;
+    }
+    if (recentSmoke) {
+      await runRecentAlbumSmoke(mainWindow, join(profile, '..'), albums, appData);
+      app.quit(); return;
+    }
     if (assetSmoke) {
       await runAssetPreviewSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
       app.quit(); return;

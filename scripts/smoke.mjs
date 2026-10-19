@@ -8,7 +8,7 @@ const electron = require('electron');
 const root = fileURLToPath(new URL('../', import.meta.url));
 const environment = { ...process.env };
 delete environment.ELECTRON_RUN_AS_NODE;
-const smokeFlag = process.argv.some(value => value === '--assets' || value === '--assets-ui') ? '--asset-preview-smoke' : process.argv.includes('--layers') ? '--layer-smoke' : process.argv.includes('--text') ? '--text-smoke' : '--framework-smoke';
+const smokeFlag = process.argv.includes('--asset-delete') ? '--asset-delete-smoke' : process.argv.some(value => value === '--assets' || value === '--assets-ui') ? '--asset-preview-smoke' : process.argv.includes('--layers') ? '--layer-smoke' : process.argv.includes('--text') ? '--text-smoke' : '--framework-smoke';
 const child = spawn(electron, [root, smokeFlag, ...(process.argv.includes('--assets-ui') ? ['--asset-preview-ui-only'] : [])], {
   cwd: root, env: environment, stdio: 'inherit', windowsHide: true
 });

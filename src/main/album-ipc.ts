@@ -9,7 +9,9 @@ import { AssetImages } from './asset-images';
 import type { Orientation } from '../shared/framework';
 import type { ImageGeometry, TextDraft } from '../shared/canvas';
 import { getTextFonts } from './text-fonts';
-import type { AlbumResult, AlbumSnapshot, AlbumState, ImportReport } from '../shared/album';
+import type { AppDataStore } from './app-data';
+import type { AppDialogs } from './app-dialogs';
+import type { AlbumResult, AlbumSnapshot, AlbumState, AssetEntry, ImportReport } from '../shared/album';
 
 /** 主菜单与 preload 共用控制器，避免并行导入和切换画册造成错写。 */
 export class AlbumController {
@@ -17,21 +19,32 @@ export class AlbumController {
   private pages = this.makePages(this.store);
   private assetImages = new AssetImages(() => this.store);
   private state: AlbumState = { revision: 0, album: null, busy: false, progress: null, canvas: null };
+  private initialized = false;
 
   constructor(private readonly getWindow: () => BrowserWindow,
-    private readonly assertSender: (event: IpcMainInvokeEvent) => void) {}
+    private readonly assertSender: (event: IpcMainInvokeEvent) => void,
+    private readonly appData: AppDataStore,
+    private readonly dialogs: AppDialogs) {}
 
   /** 每次广播增加版本号，界面能忽略初始化期间晚到的旧快照。 */
   private publish(change: Partial<AlbumState>): void {
     this.state = { ...this.state, ...change, revision: this.state.revision + 1 };
     const window = this.getWindow();
     if (!window.isDestroyed()) window.webContents.send('album:state', this.state);
-    for (const id of ['create-album', 'open-album']) {
+    this.updateMenu();
+  }
+
+  /** 业务忙碌或自定义模态打开时禁用其他菜单入口，保存仍要求当前画布有草稿。 */
+  updateMenu(): void {
+    const locked = this.state.busy || this.dialogs.isOpen;
+    for (const id of ['create-album', 'open-album', 'export-sample', 'about-app']) {
       const item = Menu.getApplicationMenu()?.getMenuItemById(id);
-      if (item) item.enabled = !this.state.busy;
+      if (item) item.enabled = !locked;
     }
     const save = Menu.getApplicationMenu()?.getMenuItemById('save-page');
-    if (save) save.enabled = !this.state.busy && !!this.state.canvas?.dirty;
+    if (save) save.enabled = !locked && !!this.state.canvas?.dirty;
+    const reopen = Menu.getApplicationMenu()?.getMenuItemById('reopen-last-album');
+    if (reopen) { reopen.checked = this.appData.reopenLastAlbum; reopen.enabled = !locked; }
   }
 
   /** 后台校验器按单次页面图片操作创建，完成后立即释放。 */
@@ -52,16 +65,17 @@ export class AlbumController {
     return true;
   }
 
-  /** 忙碌时直接拒绝；取消与失败分别返回，错误同时通过系统对话框反馈。 */
-  private async run<T>(operation: () => Promise<T | undefined>): Promise<AlbumResult<T>> {
-    if (this.state.busy) return { status: 'error', message: '正在处理画册操作，请稍候。' };
+  /** 忙碌时直接拒绝；取消与失败分别返回，启动及软件设置错误用非阻塞提示反馈。 */
+  private async run<T>(operation: () => Promise<T | undefined>, quietFailure?: string): Promise<AlbumResult<T>> {
+    if (this.state.busy || this.dialogs.isOpen) return { status: 'error', message: '请先完成当前操作或关闭弹窗。' };
     this.publish({ busy: true, progress: null });
     try {
       const value = await operation();
       return value === undefined ? { status: 'canceled' } : { status: 'success', value };
     } catch (error) {
       const message = describeFileError(error);
-      await dialog.showMessageBox(this.getWindow(), { type: 'error', title: '画册操作失败', message });
+      if (quietFailure) this.publish({ notice: [this.state.notice, `${quietFailure}：${message}`].filter(Boolean).join('\n') });
+      else await dialog.showMessageBox(this.getWindow(), { type: 'error', title: '画册操作失败', message });
       return { status: 'error', message };
     } finally {
       let album = this.state.album;
@@ -70,7 +84,7 @@ export class AlbumController {
     }
   }
 
-  /** 画册位置只能由原生目录对话框选择，不接收渲染进程传入的磁盘路径。 */
+  /** 手动打开只接受原生对话框位置，成功与启动恢复共用完整载入流程。 */
   async chooseAlbum(create: boolean): Promise<AlbumResult<null>> {
     return this.run(async () => {
       if (!await this.guardDirty()) return undefined;
@@ -79,16 +93,54 @@ export class AlbumController {
         properties: create ? ['openDirectory', 'createDirectory'] : ['openDirectory']
       });
       if (result.canceled || !result.filePaths[0]) return undefined;
-      // 候选会话完整载入后再替换旧会话，损坏画布不会使原画册失效。
-      const store = new AlbumStore();
-      const album = create ? await store.create(result.filePaths[0]) : await store.open(result.filePaths[0]);
-      const pages = this.makePages(store);
-      if (album.pages[0]) await pages.load(album.id, album.pages[0].id);
-      this.assetImages.reset();
-      this.store = store; this.pages = pages;
-      this.publish({ album });
+      await this.openDirectory(result.filePaths[0], create);
       return null;
     });
+  }
+
+  /** 候选画册和第一页完整读取后才替换会话；最近记录写入失败不撤销成功打开。 */
+  private async openDirectory(directory: string, create = false): Promise<void> {
+    const store = new AlbumStore();
+    const album = create ? await store.create(directory) : await store.open(directory);
+    const pages = this.makePages(store);
+    if (album.pages[0]) await pages.load(album.id, album.pages[0].id);
+    this.assetImages.reset();
+    this.store = store; this.pages = pages;
+    this.publish({ album, notice: this.appData.warnings.join('\n') || null, canRetryLastAlbum: false });
+    try { await this.appData.rememberAlbum((await store.project(album.id)).root, album.name); }
+    catch (error) {
+      this.publish({ notice: [this.state.notice, `画册已打开，但未能记住本次画册：${describeFileError(error)}`].filter(Boolean).join('\n') });
+    }
+  }
+
+  /** 主进程启动时仅调用一次；先占用操作锁再读配置，避免覆盖用户刚打开的画册。 */
+  async initialize(restore = true): Promise<void> {
+    if (this.initialized) return;
+    this.initialized = true;
+    await this.run(async () => {
+      await this.appData.load();
+      this.publish({ notice: this.appData.warnings.join('\n') || null });
+      if (restore && this.appData.reopenLastAlbum && this.appData.lastAlbum) {
+        this.publish({ canRetryLastAlbum: true });
+        await this.openDirectory(this.appData.lastAlbum.directory);
+      }
+      return null;
+    }, '无法自动打开上次画册，请重试或通过“打开画册”重新选择');
+  }
+
+  /** 设置入口复用操作锁；落盘失败保留原菜单勾选值，使用非阻塞提示。 */
+  async setReopenLastAlbum(enabled: boolean): Promise<AlbumResult<null>> {
+    return this.run(async () => { await this.appData.setReopenLastAlbum(enabled); return null; }, '软件设置保存失败');
+  }
+
+  /** 重试只接受主进程保存的位置；沿用未保存确认，不暴露任意路径打开接口。 */
+  async retryLastAlbum(): Promise<AlbumResult<null>> {
+    return this.run(async () => {
+      if (!this.appData.lastAlbum || !await this.guardDirty()) return undefined;
+      this.publish({ notice: this.appData.warnings.join('\n') || null });
+      await this.openDirectory(this.appData.lastAlbum.directory);
+      return null;
+    }, '无法打开上次画册，请重试或重新选择');
   }
 
   /** 校验运行时参数，TypeScript 类型不能替代 IPC 边界检查。 */
@@ -118,6 +170,7 @@ export class AlbumController {
     ipcMain.handle('album:get-state', event => { this.assertSender(event); return this.state; });
     ipcMain.handle('album:create', event => { this.assertSender(event); return this.chooseAlbum(true); });
     ipcMain.handle('album:open', event => { this.assertSender(event); return this.chooseAlbum(false); });
+    ipcMain.handle('album:retry-last', event => { this.assertSender(event); return this.retryLastAlbum(); });
     ipcMain.handle('page:save', event => { this.assertSender(event); return this.savePage(); });
     ipcMain.handle('text:fonts', event => { this.assertSender(event); return getTextFonts(); });
     ipcMain.handle('page:text', (event, albumId: string, pageId: string, objectId: string | null, draft: TextDraft, position?: { xMm: number; yMm: number }) => {
@@ -194,6 +247,25 @@ export class AlbumController {
         await this.store.createGroup(id, parent, name);
         try { await this.refresh(id); }
         catch (error) { throw new Error(`分组已创建，但列表刷新失败：${describeFileError(error)}请点击刷新。`); }
+        return null;
+      });
+    });
+    ipcMain.handle('album:delete-asset', (event, id: string, path: string, kind: AssetEntry['kind']) => {
+      this.assertSender(event);
+      return this.run(async () => {
+        this.assertArguments(id, path);
+        if (!path || !['directory', 'image'].includes(kind)) throw new Error('删除素材的目标无效，不能删除素材库根目录。');
+        const group = kind === 'directory';
+        if (!await this.dialogs.confirmAssetDeletion(path, group)) return undefined;
+        this.assetImages.releasePath(id, path, group);
+        try { await this.store.deleteAsset(id, path, kind); }
+        catch (error) {
+          // 系统失败后仍刷新真实目录；不改动当前画布草稿或请求保存。
+          await this.refresh(id).catch(() => undefined);
+          throw error;
+        }
+        try { await this.refresh(id); }
+        catch (error) { throw new Error(`素材已移入回收站，但列表刷新失败：${describeFileError(error)}请点击刷新。`); }
         return null;
       });
     });

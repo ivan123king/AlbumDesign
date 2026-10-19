@@ -11,6 +11,7 @@ import { AssetsPanel } from './components/AssetsPanel';
 import { CanvasEditor } from './components/CanvasEditor';
 import { PagesPanel } from './components/PagesPanel';
 import { TextDialog } from './components/TextDialog';
+import { AppDialogs } from './components/AppDialogs';
 
 /** 主进程保存当前页草稿；局部拖动帧由图片组件处理，主界面接收结束后的坐标。 */
 export function App(): React.JSX.Element {
@@ -18,7 +19,7 @@ export function App(): React.JSX.Element {
   const [leftWidth, setLeftWidth] = useState(232);
   const [rightWidth, setRightWidth] = useState(232);
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [message, setMessage] = useState('请新建或打开画册，再创建画布。');
+  const [message, setMessage] = useState('');
   const [state, setState] = useState<AlbumState>({ revision: -1, album: null, busy: false, progress: null, canvas: null });
   const [ready, setReady] = useState(false);
   const [pending, setPending] = useState(false);
@@ -162,6 +163,11 @@ export function App(): React.JSX.Element {
           onDragStart={event => { event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData(textDragType, mode); }}>
           {mode === 'horizontal' ? '横排文字' : '竖排文字'}</button>)}</div>
       <div className="toolbar-note">手工排版 · 自由记录</div></nav>
+    {state.notice && <aside className="app-notice" role="status" data-app-notice>
+      <span>{state.notice}</span>
+      {state.canRetryLastAlbum && <button disabled={busy} data-retry-last-album
+        onClick={() => { void execute(() => window.desktop.retryLastAlbum(), '上次画册已打开。'); }}>重试打开上次画册</button>}
+    </aside>}
     <main className="editor-layout"><AssetsPanel state={{ ...state, busy }} onMessage={setMessage} />
       <PanelDivider side="left" width={leftWidth} onChange={setLeftWidth} />
       <section className="canvas-panel" aria-label="画布编辑" tabIndex={-1} data-resizing={interacting}>
@@ -196,7 +202,8 @@ export function App(): React.JSX.Element {
         onRename={(id, name) => albumId ? execute(() => window.desktop.renamePage(albumId, id, name), '画布已改名。') : Promise.resolve(false)}
         onReorder={(id, direction) => { if (albumId) void execute(() => window.desktop.reorderPage(albumId, id, direction), '页序已更新，固定目录编号保持。'); }}
         onDelete={id => { if (albumId) void execute(() => window.desktop.deletePage(albumId, id), '画布已删除，页码已更新。'); }} />
-    </main><footer className="status-bar"><span className="status-message" role="status">{message}</span><span>本地画册 · A4</span><span>v{info?.version ?? '—'}</span></footer>
+    </main><footer className="status-bar"><span className="status-message" role="status">{message || (state.album ? '画册已打开。' : busy ? '正在准备画册…' : '请新建或打开画册，再创建画布。')}</span><span>本地画册 · A4</span><span>v{info?.version ?? '—'}</span></footer>
     {textEditor && <TextDialog object={textEditor.object} mode={textEditor.mode} fonts={fonts} busy={busy} onSubmit={submitText} onClose={() => setTextEditor(null)} />}
+    <AppDialogs info={info} />
   </div>;
 }

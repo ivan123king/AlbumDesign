@@ -48,6 +48,9 @@ export interface ImportReport {
 
 /** revision 用于丢弃晚到的旧状态，菜单与界面共享同一忙碌状态。 */
 export interface AlbumState {
+  /** 软件配置与启动恢复的非阻塞提示，独立于画布保存状态。 */
+  notice?: string | null;
+  canRetryLastAlbum?: boolean;
   revision: number;
   album: AlbumSnapshot | null;
   busy: boolean;
@@ -75,8 +78,11 @@ export interface AlbumApi {
   getAlbumState(): Promise<AlbumState>;
   createAlbum(): Promise<AlbumResult<null>>;
   openAlbum(): Promise<AlbumResult<null>>;
+  retryLastAlbum(): Promise<AlbumResult<null>>;
   refreshAssets(albumId: string): Promise<AlbumResult<null>>;
   createAssetGroup(albumId: string, parentPath: string, name: string): Promise<AlbumResult<null>>;
+  /** 删除素材或整个分组，主进程确认后移入回收站；取消或失败保留画布及其独立图片。 */
+  deleteAsset(albumId: string, path: string, kind: AssetEntry['kind']): Promise<AlbumResult<null>>;
   importAssets(albumId: string, targetPath: string): Promise<AlbumResult<ImportReport>>;
   createPage(albumId: string, name: string, orientation: Orientation): Promise<AlbumResult<null>>;
   selectPage(albumId: string, pageId: string): Promise<AlbumResult<null>>;

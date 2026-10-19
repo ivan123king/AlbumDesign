@@ -1,6 +1,6 @@
 {
   "name": "album-design",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Windows 简易画册排版工具",
   "author": "AlbumDesign",
@@ -16,6 +16,8 @@
     "smoke:text": "npm run build && node scripts/smoke.mjs --text",
     "smoke:layers": "npm run build && node scripts/smoke.mjs --layers",
     "smoke:assets": "npm run build && node scripts/smoke.mjs --assets",
+    "smoke:recent": "npm run build && node scripts/recent-smoke.mjs",
+    "smoke:asset-delete": "npm run build && node scripts/smoke.mjs --asset-delete",
     "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {

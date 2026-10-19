@@ -75,6 +75,15 @@ export class AssetImages {
     lease?.complete({ status: 'canceled' });
   }
 
+  /** 删除素材前只撤销该文件或分组下的浏览租约，不影响其他素材及页面图片。 */
+  releasePath(albumId: string, path: string, directory: boolean): void {
+    for (const lease of this.leases.values()) {
+      if (lease.albumId === albumId && (lease.assetPath === path || (directory && lease.assetPath.startsWith(`${path}/`)))) {
+        this.release(lease.id);
+      }
+    }
+  }
+
   /** 换画册或关闭时撤销全部租约与后台窗口，旧请求不能向新会话发布结果。 */
   reset(): void {
     for (const id of this.leases.keys()) this.release(id);

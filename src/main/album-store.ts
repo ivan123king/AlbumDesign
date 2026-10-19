@@ -1,8 +1,9 @@
-/** 文件用途：异步管理画册清单、素材分组和原图复制，限制所有目标路径在当前画册内。 */
+/** 文件用途：异步管理画册清单、素材分组、原图复制与回收站删除，限制路径在当前画册内。 */
 import { createReadStream } from 'node:fs';
 import { copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, unlink } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { shell } from 'electron';
 import type { AlbumManifest, AlbumSnapshot, AssetEntry, ImportProgress, ImportReport } from '../shared/album';
 import { replaceJson } from './json-storage';
 
@@ -269,6 +270,30 @@ export class AlbumStore {
   async createGroup(id: string, parentPath: string, name: string): Promise<void> {
     assertGroupName(name);
     await mkdir(join(await this.assetDirectory(id, parentPath), name));
+  }
+
+  /** 仅删除 assets 内指定条目；分组逐层拒绝链接，送入回收站失败时不降级为永久删除。 */
+  async deleteAsset(id: string, path: string, kind: AssetEntry['kind']): Promise<void> {
+    if (typeof path !== 'string' || !path || (kind !== 'directory' && kind !== 'image')) {
+      throw new Error('删除素材的目标无效，不能删除素材库根目录。');
+    }
+    const target = kind === 'directory' ? await this.assetDirectory(id, path) : await this.assetFile(id, path);
+    if (kind === 'directory') {
+      /** 移入回收站前检查全部内容，不跟随分组内目录联接、符号链接或特殊文件。 */
+      async function checkTree(directory: string): Promise<void> {
+        await assertPlainDirectory(directory);
+        for (const entry of await readdir(directory, { withFileTypes: true })) {
+          const child = join(directory, entry.name);
+          const info = await lstat(child);
+          if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) throw new Error('分组中包含链接或特殊文件，未删除；请先移除这些条目。');
+          if (info.isDirectory()) await checkTree(child);
+        }
+      }
+      await checkTree(target);
+      // 遍历结束重新核对根目录和目标，拒绝过程中发生的目录重定向。
+      await this.assetDirectory(id, path);
+    }
+    await shell.trashItem(target);
   }
 
   /** 复制到临时文件并校验，排他发布到目标名称；单项失败继续处理其余图片。 */

@@ -1,6 +1,6 @@
-/** 文件用途：按分组浏览素材缩略图，只挂载可见区域附近的小图并在离开时释放租约。 */
+/** 文件用途：按分组浏览素材缩略图，按需释放小图租约，并共用素材拖放、预览与右键操作。 */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DragEvent, RefObject } from 'react';
+import type { DragEvent, MouseEvent, RefObject } from 'react';
 import type { AssetEntry } from '../../../shared/album';
 import { useAssetImage } from './AssetPreview';
 
@@ -20,9 +20,10 @@ function ThumbnailImage({ albumId, entry }: { albumId: string; entry: ImageEntry
 }
 
 /** 每张卡片独立观察滚动容器，避免滚动时刷新整棵素材树；远处图片卸载后取消待生成任务。 */
-function ThumbnailCard({ albumId, entry, scrollRoot, locked, onPreview, onDragAsset }: {
+function ThumbnailCard({ albumId, entry, scrollRoot, locked, onPreview, onDragAsset, onContextMenu }: {
   albumId: string; entry: ImageEntry; scrollRoot: RefObject<HTMLDivElement | null>; locked: boolean;
   onPreview: (path: string) => void; onDragAsset: (event: DragEvent<HTMLDivElement>, path: string) => void;
+  onContextMenu: (event: MouseEvent<HTMLDivElement>, entry: ImageEntry) => void;
 }): React.JSX.Element {
   const card = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -38,6 +39,7 @@ function ThumbnailCard({ albumId, entry, scrollRoot, locked, onPreview, onDragAs
     role="button" tabIndex={locked ? -1 : 0} aria-disabled={locked} aria-label={`预览 ${entry.path}`}
     title={`双击预览，或拖入当前画布：${entry.path}`} draggable={!locked}
     onDragStart={event => onDragAsset(event, entry.path)}
+    onContextMenu={event => onContextMenu(event, entry)}
     onDoubleClick={() => { if (!locked) onPreview(entry.path); }}
     onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
@@ -50,10 +52,11 @@ function ThumbnailCard({ albumId, entry, scrollRoot, locked, onPreview, onDragAs
 }
 
 /** 根目录查看所有素材，分组查看自身与子分组；只遍历名称元数据，不提前读取图片文件。 */
-export function AssetGallery({ albumId, entries, selectedPath, scrollRoot, locked, onSelectDirectory, onPreview, onDragAsset }: {
+export function AssetGallery({ albumId, entries, selectedPath, scrollRoot, locked, onSelectDirectory, onPreview, onDragAsset, onContextMenu }: {
   albumId: string; entries: AssetEntry[]; selectedPath: string; scrollRoot: RefObject<HTMLDivElement | null>; locked: boolean;
   onSelectDirectory: (path: string) => void; onPreview: (path: string) => void;
   onDragAsset: (event: DragEvent<HTMLDivElement>, path: string) => void;
+  onContextMenu: (event: MouseEvent<HTMLDivElement>, entry: ImageEntry) => void;
 }): React.JSX.Element {
   const { images, directories } = useMemo(() => {
     const images: ImageEntry[] = [];
@@ -74,7 +77,7 @@ export function AssetGallery({ albumId, entries, selectedPath, scrollRoot, locke
       <option value="">全部素材</option>{directories.map(path => <option key={path} value={path}>{path}</option>)}
     </select><span>{images.length} 张 · 包含子分组</span></label>
     {images.length ? <div className="asset-thumbnail-grid">{images.map(entry => <ThumbnailCard key={entry.path}
-      albumId={albumId} entry={entry} scrollRoot={scrollRoot} locked={locked} onPreview={onPreview} onDragAsset={onDragAsset} />)}</div>
+      albumId={albumId} entry={entry} scrollRoot={scrollRoot} locked={locked} onPreview={onPreview} onDragAsset={onDragAsset} onContextMenu={onContextMenu} />)}</div>
       : <p className="asset-gallery-empty">此分组还没有图片</p>}
   </div>;
 }

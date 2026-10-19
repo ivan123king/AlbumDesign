@@ -1,16 +1,26 @@
 /** 文件用途：在隔离上下文中向界面提供有限的桌面业务接口。 */
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopApi } from '../shared/framework';
+import type { AppDialogState, DesktopApi } from '../shared/framework';
 import type { AlbumState } from '../shared/album';
 
 const desktopApi: DesktopApi = {
   getAppInfo: () => ipcRenderer.invoke('framework:app-info'),
   exportSamplePdf: () => ipcRenderer.invoke('framework:sample-pdf'),
+  getAppDialog: () => ipcRenderer.invoke('app:get-dialog'),
+  respondAppDialog: (id, confirmed) => ipcRenderer.invoke('app:respond-dialog', id, confirmed),
+  /** 不向界面传递 Electron 事件对象，取消订阅时移除相同函数。 */
+  onAppDialog: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, state: AppDialogState): void => listener(state);
+    ipcRenderer.on('app:dialog-state', handler);
+    return () => { ipcRenderer.removeListener('app:dialog-state', handler); };
+  },
   getAlbumState: () => ipcRenderer.invoke('album:get-state'),
   createAlbum: () => ipcRenderer.invoke('album:create'),
   openAlbum: () => ipcRenderer.invoke('album:open'),
+  retryLastAlbum: () => ipcRenderer.invoke('album:retry-last'),
   refreshAssets: id => ipcRenderer.invoke('album:refresh', id),
   createAssetGroup: (id, parent, name) => ipcRenderer.invoke('album:create-group', id, parent, name),
+  deleteAsset: (id, path, kind) => ipcRenderer.invoke('album:delete-asset', id, path, kind),
   importAssets: (id, target) => ipcRenderer.invoke('album:import', id, target),
   requestAssetImage: (id, path, kind, requestId, retry) => ipcRenderer.invoke('asset:image', id, path, kind, requestId, retry),
   releaseAssetImage: requestId => ipcRenderer.invoke('asset:release-image', requestId),

@@ -22,6 +22,10 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .toolbar button { background: transparent; border: none; font-size: 12px; padding: 6px; }
 .toolbar-divider { display: inline-block; height: 16px; width: 1px; background: #e1e3da; flex-shrink: 0; }
 .toolbar-note { margin-left: auto; font-size: 11px; color: #989d91; }
+/* 启动恢复和软件配置提示独立于状态栏，长路径换行且不阻塞画册操作。 */
+.app-notice { flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 10px 24px; background: #fff5df; color: #75562c; font-size: 12px; max-height: 150px; overflow: auto; }
+.app-notice > span { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.app-notice button { flex-shrink: 0; border: 1px solid #d9bf91; border-radius: 4px; background: #fffaf0; padding: 6px 10px; }
 /* 两侧宽度独立，中央允许收缩；分隔条支持指针和键盘操作。 */
 .editor-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--left-width) 5px minmax(0, 1fr) 5px var(--right-width); }
 .side-panel { background: #fcfcf9; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
@@ -176,6 +180,43 @@ button:not(:disabled):hover { filter: brightness(.97); }
 /* 原生 dialog 提供模态焦点管理，名称输入与操作提示使用中文。 */
 .group-dialog { border: 1px solid #d4dbca; border-radius: 9px; padding: 24px; width: min(390px, 90vw); background: #fcfcf9; color: #45533a; box-shadow: 0 18px 70px #27351b30; }
 .group-dialog::backdrop { background: #26321f48; }
+/* 软件弹窗按告警与信息区分；底部操作固定分区，HTML dialog 约束焦点和遮罩。 */
+.app-dialog { position: fixed; width: min(500px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; padding: 0; border: 1px solid #dfe4d8; border-radius: 16px; background: #fffefa; color: #30382a; box-shadow: 0 24px 90px #1e2c2540; }
+.app-dialog::backdrop { background: #222b2b66; backdrop-filter: blur(3px); }
+.app-dialog button { font: inherit; }
+.app-dialog-content { padding: 32px 32px 24px; }
+.app-dialog-close { position: absolute; right: 14px; top: 12px; width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: #899081; font-size: 25px !important; line-height: 1; }
+.app-dialog-close:hover { background: #eef1e8; }
+.app-dialog-heading { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+.app-warning-icon { display: grid; place-items: center; width: 52px; height: 52px; flex-shrink: 0; border-radius: 15px; color: #b17626; background: #fbefd8; }
+.app-warning-icon svg { width: 28px; height: 28px; }
+.app-dialog-eyebrow { display: block; margin-bottom: 6px; font-size: 11px; letter-spacing: 1.5px; color: #89907e; }
+.app-dialog h2 { font-size: 21px; font-weight: 600; margin: 0; letter-spacing: .5px; }
+.app-delete-target { padding: 14px 16px; border: 1px solid #e8e9df; border-radius: 9px; background: #f7f8f2; }
+.app-delete-target > span { display: block; font-size: 11px; color: #8b927f; margin-bottom: 7px; }
+.app-delete-target strong { display: block; max-height: 112px; overflow: auto; overflow-wrap: anywhere; font-size: 14px; font-weight: 500; line-height: 1.7; }
+.app-dialog-description { font-size: 13px; line-height: 1.9; color: #666c5e; margin: 18px 0 16px; }
+.app-dialog-assurance { margin: 0; color: #62764d; font-size: 12px; line-height: 1.8; }
+.app-dialog-assurance > span { margin-right: 7px; }
+.app-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 18px 32px; border-top: 1px solid #e9ece2; background: #f7f8f2; }
+.app-dialog-actions button { min-width: 86px; padding: 9px 20px; border: 1px solid #d5ddcb; border-radius: 7px; font-size: 13px; }
+.app-dialog-cancel { background: #fffefa; color: #616b54; }
+.app-dialog-confirm { background: #657552; color: white; border-color: #657552 !important; }
+.app-dialog-warning .app-dialog-confirm { background: #a66b28; border-color: #a66b28 !important; }
+.app-dialog button:focus-visible { outline: 2px solid #899b72; outline-offset: 3px; }
+.app-dialog-warning .app-dialog-confirm:focus-visible { outline-color: #c89b60; }
+.app-dialog button:disabled { opacity: .65; }
+.app-dialog-error { color: #9c513b; font-size: 12px; padding: 0 32px; }
+.app-about-brand { display: flex; align-items: center; gap: 16px; padding: 9px 0 26px; border-bottom: 1px solid #e7ebdf; }
+.app-about-mark { display: grid; place-items: center; width: 62px; height: 66px; flex-shrink: 0; color: #fff; background: #657552; border-radius: 9px 20px 9px 9px; font: 35px 'SimSun', serif; }
+.app-about-brand h2 { font-size: 24px; letter-spacing: 3px; }
+.app-about-tagline { display: block; margin-top: 9px; color: #939a86; font-size: 11px; letter-spacing: 1px; }
+.app-about-version { margin-left: auto; align-self: center; color: #657552; background: #edf1e5; border: 1px solid #dce4cf; border-radius: 20px; padding: 5px 12px; font-size: 12px; white-space: nowrap; }
+.app-about-details { margin: 24px 0 3px; font-size: 13px; }
+.app-about-details > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 14px; margin-top: 19px; align-items: baseline; }
+.app-about-details dt { color: #8c947f; }
+.app-about-details dd { margin: 0; line-height: 1.7; overflow-wrap: anywhere; user-select: text; }
+.app-about-contact { font-family: 'Segoe UI', sans-serif; color: #62744f; }
 .group-dialog h2 { margin: 0 0 12px; font-size: 16px; }
 .group-dialog p { font-size: 12px; color: #859178; overflow-wrap: anywhere; }
 .group-dialog label { display: block; font-size: 12px; margin: 18px 0 8px; }
