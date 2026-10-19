@@ -12,12 +12,14 @@ import { runAlbumSmoke } from './album-smoke';
 import { runPageSmoke } from './page-smoke';
 import { runTextSmoke } from './text-smoke';
 import { runLayerSmoke } from './layer-smoke';
+import { runAssetPreviewSmoke } from './asset-preview-smoke';
 
 declareImageProtocol();
 
 const textSmoke = !app.isPackaged && process.argv.includes('--text-smoke');
 const layerSmoke = !app.isPackaged && process.argv.includes('--layer-smoke');
-const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke);
+const assetSmoke = !app.isPackaged && process.argv.includes('--asset-preview-smoke');
+const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke || assetSmoke);
 const projectRoot = join(__dirname, '../..');
 const rendererFile = join(__dirname, '../renderer/index.html');
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined;
@@ -180,9 +182,13 @@ async function bootstrap(): Promise<void> {
       if (allowed && mainWindow) { closeApproved = true; mainWindow.close(); }
     });
   });
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => { albums.dispose(); mainWindow = null; });
   await loadRenderer(mainWindow);
   if (smokeMode) {
+    if (assetSmoke) {
+      await runAssetPreviewSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
+      app.quit(); return;
+    }
     if (layerSmoke) {
       await runLayerSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
       app.quit(); return;

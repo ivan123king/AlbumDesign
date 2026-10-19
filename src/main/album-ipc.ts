@@ -5,6 +5,7 @@ import { AlbumStore, describeFileError } from './album-store';
 import { ImageValidationTask } from './image-validator';
 import { installPageImageProtocol } from './image-validator';
 import { PageStore } from './page-store';
+import { AssetImages } from './asset-images';
 import type { Orientation } from '../shared/framework';
 import type { ImageGeometry, TextDraft } from '../shared/canvas';
 import { getTextFonts } from './text-fonts';
@@ -14,6 +15,7 @@ import type { AlbumResult, AlbumSnapshot, AlbumState, ImportReport } from '../sh
 export class AlbumController {
   private store = new AlbumStore();
   private pages = this.makePages(this.store);
+  private assetImages = new AssetImages(() => this.store);
   private state: AlbumState = { revision: 0, album: null, busy: false, progress: null, canvas: null };
 
   constructor(private readonly getWindow: () => BrowserWindow,
@@ -82,6 +84,7 @@ export class AlbumController {
       const album = create ? await store.create(result.filePaths[0]) : await store.open(result.filePaths[0]);
       const pages = this.makePages(store);
       if (album.pages[0]) await pages.load(album.id, album.pages[0].id);
+      this.assetImages.reset();
       this.store = store; this.pages = pages;
       this.publish({ album });
       return null;
@@ -102,6 +105,15 @@ export class AlbumController {
 
   /** 注册有限业务接口，所有调用复用现有主窗口来源校验。 */
   register(): void {
+    this.assetImages.install();
+    ipcMain.handle('asset:image', (event, id: string, path: string, kind: 'preview' | 'thumbnail', requestId: string, retry?: boolean) => {
+      this.assertSender(event);
+      return this.assetImages.request(id, path, kind, requestId, retry);
+    });
+    ipcMain.handle('asset:release-image', (event, requestId: string) => {
+      this.assertSender(event);
+      if (typeof requestId === 'string') this.assetImages.release(requestId);
+    });
     installPageImageProtocol((albumId, pageId, objectId) => this.pages.imagePath(albumId, pageId, objectId));
     ipcMain.handle('album:get-state', event => { this.assertSender(event); return this.state; });
     ipcMain.handle('album:create', event => { this.assertSender(event); return this.chooseAlbum(true); });
@@ -214,6 +226,7 @@ export class AlbumController {
     const album = await store.open(directory);
     const pages = this.makePages(store);
     if (album.pages[0]) await pages.load(album.id, album.pages[0].id);
+    this.assetImages.reset();
     this.store = store; this.pages = pages;
     this.publish({ album });
     this.publish({ canvas: pages.snapshot() });
@@ -231,4 +244,7 @@ export class AlbumController {
     const result = await this.run(async () => await this.guardDirty());
     return result.status === 'success' && result.value;
   }
+
+  /** 主窗口关闭后释放浏览租约和后台图片任务。 */
+  dispose(): void { this.assetImages.reset(); }
 }

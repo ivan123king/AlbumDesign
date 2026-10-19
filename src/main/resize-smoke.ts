@@ -42,7 +42,8 @@ async function openSizeDialog(window: BrowserWindow, objectId: string): Promise<
   window.webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'right', clickCount: 1 });
   window.webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'right', clickCount: 1 });
   await waitFor(window, "document.querySelector('.image-context-menu [role=menuitem]')");
-  await window.webContents.executeJavaScript("document.querySelector('.image-context-menu [role=menuitem]').click()");
+  // 菜单可以增加改名等入口，按动作名称定位尺寸项，不依赖第一项的位置。
+  await window.webContents.executeJavaScript("[...document.querySelectorAll('.image-context-menu [role=menuitem]')].find(item => item.textContent === '调整图片大小').click()");
   await waitFor(window, "document.querySelector('.image-size-dialog[open]')");
 }
 

@@ -57,6 +57,38 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .asset-file { display: flex; gap: 7px; align-items: center; padding: 7px 4px 7px 23px; font-size: 11px; color: #767f6d; }
 .asset-file > span:first-child { flex-shrink: 0; color: #9ba68f; }
 .asset-file[draggable="true"] { cursor: grab; }
+
+/* 素材预览仅显示一张原图，完整适应弹框，透明图片以棋盘格衬底。 */
+.group-dialog.asset-preview-dialog { width: min(1000px, 92vw); max-height: 90vh; overflow: auto; }
+.asset-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.asset-preview-heading h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
+.asset-preview-heading button { flex-shrink: 0; padding: 6px 12px; }
+.asset-preview-dialog .asset-preview-path { margin: 12px 0; overflow-wrap: anywhere; }
+.asset-preview-body { position: relative; height: min(65vh, 680px); display: grid; place-items: center; overflow: hidden;
+  background: repeating-conic-gradient(#e9ece4 0% 25%, #f7f8f5 0% 50%) 0 0 / 20px 20px; }
+.asset-preview-body img { width: 100%; height: 100%; min-height: 0; object-fit: contain; image-orientation: from-image; }
+.asset-image-status { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; padding: 12px; font-size: 12px; }
+.asset-image-status button { justify-self: center; padding: 5px 12px; }
+.asset-preview-dialog .asset-preview-hint { margin-bottom: 0; }
+
+/* 网格保留卡片占位，仅在滚动容器附近挂载实际小图，离屏时释放图片与待生成任务。 */
+.asset-tabs { display: flex; margin: 0 18px 10px; gap: 4px; border-bottom: 1px solid #dce1d3; flex-shrink: 0; }
+.asset-tabs button { flex: 1; padding: 8px 0; background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; font-size: 12px; }
+.asset-tabs button[aria-selected="true"] { color: #455b32; border-bottom-color: #758b5f; font-weight: 600; }
+.asset-gallery-filter { display: grid; gap: 6px; padding: 4px 2px 12px; font-size: 11px; color: #767f6d; }
+.asset-gallery-filter select { width: 100%; min-width: 0; font: inherit; padding: 6px; border: 1px solid #dce1d3; border-radius: 4px; background: #fcfcf9; }
+.asset-gallery-filter > span { font-size: 10px; color: #859178; }
+.asset-thumbnail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 88px), 1fr)); gap: 10px; }
+.asset-thumbnail-card { min-width: 0; border: 1px solid #dce1d3; border-radius: 5px; padding: 5px; background: #fcfcf9; cursor: grab; }
+.asset-thumbnail-card:hover, .asset-thumbnail-card:focus-visible { border-color: #879b70; background: #f3f6ee; }
+.asset-thumbnail-picture { position: relative; display: grid; place-items: center; height: 108px; overflow: hidden;
+  background: repeating-conic-gradient(#e9ece4 0% 25%, #f7f8f5 0% 50%) 0 0 / 16px 16px; color: #9ba68f; }
+.asset-thumbnail-picture img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.asset-thumbnail-name, .asset-thumbnail-path { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.asset-thumbnail-name { margin-top: 6px; font-size: 11px; }
+.asset-thumbnail-path { margin-top: 3px; font-size: 10px; color: #859178; }
+.asset-thumbnail-error { font-size: 10px; gap: 4px; }
+.asset-gallery-empty { text-align: center; padding: 25px 5px; font-size: 12px; color: #859178; }
 /* 正式画布保存竖向基础坐标；外层缩放和整页旋转仅改变编辑视角。 */
 .canvas-view { position: relative; }
 /* clip 保留纸张裁切但不创建可滚动容器，阻止越界图片的键盘焦点使图像与选框错位。 */

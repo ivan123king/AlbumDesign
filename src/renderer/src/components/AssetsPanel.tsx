@@ -1,8 +1,10 @@
-/** 文件用途：显示真实素材目录树，处理分组、批量导入及逐项结果反馈。 */
+/** 文件用途：显示素材目录与按需缩略图，处理单张预览、分组、批量导入及结果反馈。 */
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { DragEvent, FormEvent } from 'react';
 import type { AlbumState, AssetEntry, ImportReport } from '../../../shared/album';
 import { assetDragType } from '../../../shared/canvas';
+import { AssetPreview } from './AssetPreview';
+import { AssetGallery } from './AssetGallery';
 
 interface AssetsPanelProps {
   state: AlbumState;
@@ -41,7 +43,7 @@ function GroupDialog({ busy, target, onCreate, onClose }: {
   </dialog>;
 }
 
-/** 只把展开目录挂载到界面；叶子显示文件名，不加载整批原图。 */
+/** 目录只挂载展开项，缩略图只在预览 TAB 中按需加载；两个视图共用分组与素材拖动。 */
 export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.Element {
   const { album, busy, progress } = state;
   const [selectedPath, setSelectedPath] = useState('');
@@ -49,6 +51,10 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [report, setReport] = useState<ImportReport | null>(null);
   const [localPending, setLocalPending] = useState(false);
+  const [preview, setPreview] = useState<{ albumId: string; path: string } | null>(null);
+  const [view, setView] = useState<'directory' | 'gallery'>('directory');
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const scrollRoot = useRef<HTMLDivElement>(null);
   const locked = busy || localPending;
 
   useEffect(() => {
@@ -56,6 +62,8 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
     setExpanded(new Set());
     setCreatingGroup(false);
     setReport(null);
+    setPreview(null);
+    setView('directory');
   }, [album?.id]);
 
   useEffect(() => {
@@ -117,12 +125,21 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
     setLocalPending(true);
     try {
       const result = await window.desktop.refreshAssets(album.id);
+      if (result.status === 'success') setRefreshVersion(value => value + 1);
       onMessage(result.status === 'error' ? result.message : '素材列表已刷新');
     } catch { onMessage('桌面接口连接失败，请重试。'); }
     finally { setLocalPending(false); }
   }
 
-  /** 使用原生按钮支持 Tab、Enter、空格，不把文件名当作 HTML 渲染。 */
+  /** 两种视图共用相对路径拖放，不将图片地址或缓存文件当作画布原图。 */
+  function dragAsset(event: DragEvent<HTMLDivElement>, path: string): void {
+    if (!album || locked) { event.preventDefault(); return; }
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData(assetDragType, JSON.stringify({ albumId: album.id, assetPath: path }));
+    if (!state.canvas) onMessage('请先在右侧新建画布，再拖入图片。');
+  }
+
+  /** 目录按钮与可聚焦图片行支持键盘操作，文件名只按纯文本显示。 */
   function renderEntries(entries: AssetEntry[]): React.JSX.Element {
     return <ul className="asset-tree">{entries.map(entry => <li key={entry.path}>
       {entry.kind === 'directory' ? <>
@@ -136,13 +153,15 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
             }}><span className="asset-folder" aria-hidden="true">▱</span><span>{entry.name}</span></button>
         </div>
         {expanded.has(entry.path) && (entry.children.length ? renderEntries(entry.children) : <p className="asset-folder-empty">空分组</p>)}
-      </> : <div className="asset-file" title={`拖入当前画布：${entry.path}`} data-asset-file={entry.path} draggable={!locked}
-        onDragStart={event => {
-          if (!album || locked) { event.preventDefault(); return; }
-          event.dataTransfer.effectAllowed = 'copy';
-          event.dataTransfer.setData(assetDragType, JSON.stringify({ albumId: album.id, assetPath: entry.path }));
-          if (!state.canvas) onMessage('请先在右侧新建画布，再拖入图片。');
-        }}>
+      </> : <div className="asset-file" title={`双击预览，或拖入当前画布：${entry.path}`} data-asset-file={entry.path} draggable={!locked}
+        role="button" tabIndex={locked ? -1 : 0} aria-label={`预览 ${entry.name}`} aria-disabled={locked}
+        onDoubleClick={() => { if (album && !locked) setPreview({ albumId: album.id, path: entry.path }); }}
+        onKeyDown={event => {
+          if (album && !locked && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault(); setPreview({ albumId: album.id, path: entry.path });
+          }
+        }}
+        onDragStart={event => dragAsset(event, entry.path)}>
         <span aria-hidden="true">▧</span><span>{entry.name}</span></div>}
     </li>)}</ul>;
   }
@@ -154,14 +173,28 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
       title={!album ? '请先新建或打开画册' : `导入到：${selectedPath || '素材库'}`}>＋ {progress ? '正在导入…' : '导入图片'}</button>
     <div className="asset-actions"><button disabled={!album || locked} onClick={() => setCreatingGroup(true)}>＋ 新建分组</button>
       <button disabled={!album || locked} onClick={() => { void refresh(); }}>刷新</button></div>
+    <div className="asset-tabs" role="tablist" aria-label="素材浏览方式">
+      {(['directory', 'gallery'] as const).map(mode => <button key={mode} type="button" role="tab" id={`asset-tab-${mode}`}
+        aria-selected={view === mode} aria-controls="asset-browser-panel" tabIndex={view === mode ? 0 : -1}
+        onClick={() => setView(mode)} onKeyDown={event => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+            event.preventDefault();
+            const next = event.key === 'Home' ? 'directory' : event.key === 'End' ? 'gallery' : mode === 'directory' ? 'gallery' : 'directory';
+            setView(next); document.getElementById(`asset-tab-${next}`)?.focus();
+          }
+        }}>{mode === 'directory' ? '目录' : '预览'}</button>)}
+    </div>
     <button className={`assets-root ${selectedPath === '' && album ? 'selected' : ''}`} disabled={!album || locked}
       aria-pressed={selectedPath === ''} onClick={() => setSelectedPath('')} data-asset-root>
       <span className="folder-symbol" aria-hidden="true">▱</span>素材库</button>
     {album && <div className="asset-target" title={selectedPath || '素材库'}>导入位置：{selectedPath || '素材库'}</div>}
     {progress && <div className="import-progress" role="status"><progress max={progress.total} value={progress.completed} />
       <span>{progress.completed} / {progress.total} · {progress.fileName}</span></div>}
-    <div className="asset-scroll">
-      {album?.assets.length ? renderEntries(album.assets) : <div className="asset-empty"><div className="empty-symbol" aria-hidden="true">▧</div>
+    <div className="asset-scroll" ref={scrollRoot} id="asset-browser-panel" role="tabpanel" aria-labelledby={`asset-tab-${view}`}>
+      {album?.assets.length ? (view === 'directory' ? renderEntries(album.assets) : <AssetGallery
+        key={`${album.id}:${selectedPath}:${refreshVersion}`} albumId={album.id} entries={album.assets} selectedPath={selectedPath}
+        scrollRoot={scrollRoot} locked={locked} onSelectDirectory={path => { setSelectedPath(path); if (scrollRoot.current) scrollRoot.current.scrollTop = 0; }}
+        onPreview={path => setPreview({ albumId: album.id, path })} onDragAsset={dragAsset} />) : <div className="asset-empty"><div className="empty-symbol" aria-hidden="true">▧</div>
         <strong>这里还没有图片</strong><p>{album ? '导入 JPEG、PNG 图片，或新建分组。' : <>新建或打开画册后，<br />在这里管理你的素材。</>}</p></div>}
     </div>
     {!!album?.warnings.length && <details className="asset-notice"><summary>目录提示（{album.warnings.length}）</summary>
@@ -174,5 +207,7 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
     </details>}
     <div className="panel-footer">{album ? '素材已直接保存到画册目录' : '素材将保存在画册的 assets 目录'}</div>
     {creatingGroup && <GroupDialog busy={locked} target={selectedPath} onCreate={createGroup} onClose={() => setCreatingGroup(false)} />}
+    {preview && preview.albumId === album?.id && <AssetPreview key={`${preview.albumId}:${preview.path}`}
+      albumId={preview.albumId} path={preview.path} onClose={() => setPreview(null)} />}
   </aside>;
 }

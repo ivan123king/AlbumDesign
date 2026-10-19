@@ -247,6 +247,24 @@ export class AlbumStore {
     return file;
   }
 
+  /** 只创建固定的可重建素材缓存目录；逐层拒绝链接，兼容未创建缓存的旧画册。 */
+  async assetThumbnailDirectory(id: string): Promise<string> {
+    const { root } = await this.project(id);
+    await assertAlbumRoot(root);
+    let directory = root;
+    for (const name of ['cache', 'thumbnails', 'assets']) {
+      directory = join(directory, name);
+      try { await assertPlainDirectory(directory); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        try { await mkdir(directory); }
+        catch (creationError) { if ((creationError as NodeJS.ErrnoException).code !== 'EEXIST') throw creationError; }
+        await assertPlainDirectory(directory);
+      }
+    }
+    return directory;
+  }
+
   /** 创建指定分组；重名报错而不是合并现有目录。 */
   async createGroup(id: string, parentPath: string, name: string): Promise<void> {
     assertGroupName(name);
