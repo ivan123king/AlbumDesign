@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AlbumState, AssetEntry, ImportReport } from '../../../shared/album';
+import { assetDragType } from '../../../shared/canvas';
 
 interface AssetsPanelProps {
   state: AlbumState;
@@ -135,7 +136,13 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
             }}><span className="asset-folder" aria-hidden="true">▱</span><span>{entry.name}</span></button>
         </div>
         {expanded.has(entry.path) && (entry.children.length ? renderEntries(entry.children) : <p className="asset-folder-empty">空分组</p>)}
-      </> : <div className="asset-file" title={entry.path} data-asset-file={entry.path}>
+      </> : <div className="asset-file" title={`拖入当前画布：${entry.path}`} data-asset-file={entry.path} draggable={!locked}
+        onDragStart={event => {
+          if (!album || locked) { event.preventDefault(); return; }
+          event.dataTransfer.effectAllowed = 'copy';
+          event.dataTransfer.setData(assetDragType, JSON.stringify({ albumId: album.id, assetPath: entry.path }));
+          if (!state.canvas) onMessage('请先在右侧新建画布，再拖入图片。');
+        }}>
         <span aria-hidden="true">▧</span><span>{entry.name}</span></div>}
     </li>)}</ul>;
   }

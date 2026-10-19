@@ -1,9 +1,10 @@
 /** 文件用途：异步管理画册清单、素材分组和原图复制，限制所有目标路径在当前画册内。 */
 import { createReadStream } from 'node:fs';
 import { copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, unlink } from 'node:fs/promises';
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AlbumManifest, AlbumSnapshot, AssetEntry, ImportProgress, ImportReport } from '../shared/album';
+import { replaceJson } from './json-storage';
 
 export type ImageFormat = 'jpeg' | 'png';
 export type ImageValidator = (filePath: string, format: ImageFormat) => Promise<void>;
@@ -70,7 +71,7 @@ async function assertAlbumRoot(root: string): Promise<void> {
 }
 
 /** 优先同卷排他发布；不支持硬链接的磁盘使用排他创建及异步复制，失败仅删除自建目标。 */
-async function publishExclusive(source: string, destination: string): Promise<void> {
+export async function publishExclusive(source: string, destination: string): Promise<void> {
   try { await link(source, destination); return; }
   catch (error) {
     if (!['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
@@ -90,6 +91,7 @@ async function publishExclusive(source: string, destination: string): Promise<vo
 /** 状态仅在完整读取成功后切换；调用方负责串行化业务操作。 */
 export class AlbumStore {
   private current: { root: string; id: string; manifest: AlbumManifest } | null = null;
+  private manifestText = '';
 
   /** 新建只接受空目录；失败只清理本次创建的文件及空目录。 */
   async create(directory: string): Promise<AlbumSnapshot> {
@@ -126,7 +128,8 @@ export class AlbumStore {
     }
     const scanned = await this.scan(root);
     this.current = { root, id: randomUUID(), manifest };
-    return { id: this.current.id, name: manifest.name, ...scanned };
+    this.manifestText = await readFile(join(root, 'project.json'), 'utf8');
+    return { id: this.current.id, name: manifest.name, pages: manifest.pages, ...scanned };
   }
 
   /** 解析、目录检查和扫描均成功后才替换当前会话；无效画册保持原会话可用。 */
@@ -137,7 +140,8 @@ export class AlbumStore {
     const info = await lstat(manifestPath);
     if (!info.isFile() || info.isSymbolicLink() || info.size > 2 * 1024 * 1024) throw new Error('画册信息文件无效或过大。');
     let value: unknown;
-    try { value = JSON.parse(await readFile(manifestPath, 'utf8')); }
+    let manifestText: string;
+    try { manifestText = await readFile(manifestPath, 'utf8'); value = JSON.parse(manifestText); }
     catch (error) {
       if (error instanceof SyntaxError) throw new Error('project.json 内容损坏，无法打开画册。');
       throw error;
@@ -147,7 +151,8 @@ export class AlbumStore {
     await assertPlainDirectory(join(root, 'pages'));
     const scanned = await this.scan(root);
     this.current = { root, id: randomUUID(), manifest };
-    return { id: this.current.id, name: manifest.name, ...scanned };
+    this.manifestText = manifestText;
+    return { id: this.current.id, name: manifest.name, pages: manifest.pages, ...scanned };
   }
 
   /** 每个入口校验会话，防止旧画册界面的延迟请求写入新画册。 */
@@ -208,7 +213,38 @@ export class AlbumStore {
   /** 读取实时素材树；扫描失败时调用方保留上次成功的界面状态并报告错误。 */
   async snapshot(id?: string): Promise<AlbumSnapshot> {
     const session = this.session(id);
-    return { id: session.id, name: session.manifest.name, ...await this.scan(session.root) };
+    return { id: session.id, name: session.manifest.name, pages: session.manifest.pages, ...await this.scan(session.root) };
+  }
+
+  /** 仅主进程页面存储使用，返回副本，防止失败操作提前改变已提交的清单。 */
+  async project(id: string): Promise<{ root: string; manifest: AlbumManifest }> {
+    const session = this.session(id);
+    await assertAlbumRoot(session.root);
+    return { root: session.root, manifest: structuredClone(session.manifest) };
+  }
+
+  /** 错误收尾也可读取已提交页序，不因画册目录暂时不可访问而卡住忙碌状态。 */
+  pageReferences(id: string): AlbumManifest['pages'] { return structuredClone(this.session(id).manifest.pages); }
+
+  /** 清单变更校验后原子替换，外部修改或写入失败不更新内存状态。 */
+  async commitManifest(id: string, manifest: AlbumManifest): Promise<void> {
+    const { root } = await this.project(id);
+    parseManifest(manifest);
+    this.manifestText = await replaceJson(join(root, 'project.json'), manifest, this.manifestText);
+    this.session(id).manifest = structuredClone(manifest);
+  }
+
+  /** 素材文件必须位于已校验目录内且为普通 JPEG/PNG，渲染进程不能指定外部源。 */
+  async assetFile(id: string, path: string): Promise<string> {
+    if (typeof path !== 'string' || path.includes('\\') || !supportedExtensions.has(extname(path).toLowerCase())) throw new Error('素材文件路径无效。');
+    const name = basename(path);
+    if (/[<>:"|?*\u0000-\u001f]/u.test(name) || /[ .]$/u.test(name)
+      || /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(name)) throw new Error('素材文件名无效。');
+    const directory = await this.assetDirectory(id, dirname(path) === '.' ? '' : dirname(path));
+    const file = join(directory, name);
+    const stat = await lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('素材文件不能是目录或链接。');
+    return file;
   }
 
   /** 创建指定分组；重名报错而不是合并现有目录。 */

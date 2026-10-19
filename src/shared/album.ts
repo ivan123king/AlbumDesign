@@ -1,5 +1,6 @@
 /** 文件用途：定义画册存储、素材目录及受限进程通信的数据契约。 */
 import type { Orientation } from './framework';
+import type { CanvasSnapshot, ImageGeometry } from './canvas';
 
 /** 页面目录编号与数组中的页序分开保存，后续页面管理沿用此约定。 */
 export interface AlbumPageReference {
@@ -8,7 +9,7 @@ export interface AlbumPageReference {
   directoryName: string;
 }
 
-/** 格式版本不兼容时拒绝打开；新画册暂不创建业务页面。 */
+/** 格式版本不兼容时拒绝打开；新画册页面列表为空，由用户创建画布。 */
 export interface AlbumManifest {
   formatVersion: 1;
   name: string;
@@ -28,6 +29,7 @@ export interface AlbumSnapshot {
   assets: AssetEntry[];
   imageCount: number;
   warnings: string[];
+  pages: AlbumPageReference[];
 }
 
 export interface ImportProgress {
@@ -50,6 +52,7 @@ export interface AlbumState {
   album: AlbumSnapshot | null;
   busy: boolean;
   progress: ImportProgress | null;
+  canvas: CanvasSnapshot | null;
 }
 
 export type AlbumResult<T> =
@@ -67,5 +70,16 @@ export interface AlbumApi {
   refreshAssets(albumId: string): Promise<AlbumResult<null>>;
   createAssetGroup(albumId: string, parentPath: string, name: string): Promise<AlbumResult<null>>;
   importAssets(albumId: string, targetPath: string): Promise<AlbumResult<ImportReport>>;
+  createPage(albumId: string, name: string, orientation: Orientation): Promise<AlbumResult<null>>;
+  selectPage(albumId: string, pageId: string): Promise<AlbumResult<null>>;
+  renamePage(albumId: string, pageId: string, name: string): Promise<AlbumResult<null>>;
+  reorderPage(albumId: string, pageId: string, direction: -1 | 1): Promise<AlbumResult<null>>;
+  deletePage(albumId: string, pageId: string): Promise<AlbumResult<null>>;
+  addPageImage(albumId: string, pageId: string, assetPath: string): Promise<AlbumResult<null>>;
+  movePageImage(albumId: string, pageId: string, objectId: string, xMm: number, yMm: number): Promise<AlbumResult<null>>;
+  resizePageImage(albumId: string, pageId: string, objectId: string, geometry: ImageGeometry): Promise<AlbumResult<null>>;
+  deletePageImage(albumId: string, pageId: string, objectId: string): Promise<AlbumResult<null>>;
+  setPageOrientation(albumId: string, pageId: string, orientation: Orientation): Promise<AlbumResult<null>>;
+  savePage(): Promise<AlbumResult<null>>;
   onAlbumState(listener: (state: AlbumState) => void): () => void;
 }

@@ -1,174 +1,166 @@
-/** 文件用途：组装画册素材管理和三栏框架，保留 A4 样例预览及独立样例导出。 */
-import { useEffect, useRef, useState } from 'react';
+/** 文件用途：组装素材、当前页编辑和页面对象列表，协调受限操作及手动保存。 */
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { getPageSize, previewPages } from '../../shared/framework';
+import { getPageSize } from '../../shared/framework';
 import type { AppInfo, Orientation } from '../../shared/framework';
-import { PagePreview } from './components/PagePreview';
+import type { AlbumResult, AlbumState } from '../../shared/album';
+import { mmToPixels } from '../../shared/canvas';
+import type { ImageGeometry } from '../../shared/canvas';
 import { PanelDivider } from './components/PanelDivider';
 import { AssetsPanel } from './components/AssetsPanel';
-import type { AlbumState } from '../../shared/album';
+import { CanvasEditor } from './components/CanvasEditor';
+import { PagesPanel } from './components/PagesPanel';
 
-const mmToPixels = 96 / 25.4;
-const unavailable = '页面管理与排版保存将在后续阶段接入';
-
-/** 素材使用真实画册状态；中间与右侧仍明确标注为固定方向样例。 */
+/** 主进程保存当前页草稿；局部拖动帧由图片组件处理，主界面接收结束后的坐标。 */
 export function App(): React.JSX.Element {
-  const [orientation, setOrientation] = useState<Orientation>('portrait');
   const [zoom, setZoom] = useState(0.65);
   const [leftWidth, setLeftWidth] = useState(232);
   const [rightWidth, setRightWidth] = useState(232);
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [message, setMessage] = useState('框架预览，尚未打开画册');
+  const [message, setMessage] = useState('请新建或打开画册，再创建画布。');
+  const [state, setState] = useState<AlbumState>({ revision: -1, album: null, busy: false, progress: null, canvas: null });
+  const [ready, setReady] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [interacting, setInteracting] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [albumState, setAlbumState] = useState<AlbumState>({ revision: -1, album: null, busy: false, progress: null });
-  const [albumReady, setAlbumReady] = useState(false);
-  const [choosingAlbum, setChoosingAlbum] = useState(false);
+  const [selection, setSelection] = useState<{ kind: 'page' | 'image'; id: string } | null>(null);
   const workspace = useRef<HTMLDivElement>(null);
-  const page = previewPages.find(item => item.orientation === orientation)!;
+  const localLock = useRef(false);
+  const albumId = state.album?.id;
+  const pageId = state.canvas?.pageId;
+  const busy = state.busy || pending || interacting;
+  const orientation = state.canvas?.document.orientation ?? 'portrait';
   const size = getPageSize(orientation);
+  const current = state.album?.pages.find(page => page.id === pageId);
+  const selectedId = selection?.kind === 'image' ? selection.id : null;
   const layoutStyle = { '--left-width': `${leftWidth}px`, '--right-width': `${rightWidth}px` } as CSSProperties;
 
   useEffect(() => {
     let disposed = false;
-    void window.desktop.getAppInfo().then(value => { if (!disposed) setInfo(value); })
-      .catch(() => { if (!disposed) setMessage('桌面接口连接失败，请通过桌面程序启动。'); });
-    return () => { disposed = true; };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    /** 状态事件可能先于初始化响应返回，按版本号接收，避免覆盖已打开的画册。 */
-    const receive = (state: AlbumState): void => {
-      if (!disposed) {
-        setAlbumState(previous => state.revision >= previous.revision ? state : previous);
-        setAlbumReady(true);
-      }
+    void window.desktop.getAppInfo().then(value => { if (!disposed) setInfo(value); }).catch(() => {
+      if (!disposed) setMessage('桌面接口连接失败，请通过桌面程序启动。');
+    });
+    /** 初始查询与事件可能交错，版本号防止旧状态覆盖最新编辑。 */
+    const receive = (value: AlbumState): void => {
+      if (!disposed) { setState(previous => value.revision >= previous.revision ? value : previous); setReady(true); }
     };
     const unsubscribe = window.desktop.onAlbumState(receive);
-    void window.desktop.getAlbumState().then(receive).catch(() => {
-      if (!disposed) setMessage('画册接口连接失败，请重新启动桌面程序。');
-    });
+    void window.desktop.getAlbumState().then(receive).catch(() => { if (!disposed) setMessage('画册接口连接失败。'); });
     return () => { disposed = true; unsubscribe(); };
   }, []);
-
-  /** 新建与打开共用主进程原生目录选择；素材操作即时落盘，无页面保存伪状态。 */
-  async function chooseAlbum(create: boolean): Promise<void> {
-    if (choosingAlbum || albumState.busy) return;
-    setChoosingAlbum(true);
-    try {
-      const result = await (create ? window.desktop.createAlbum() : window.desktop.openAlbum());
-      setMessage(result.status === 'success' ? '画册已就绪，可在左侧导入素材；中央与右侧仍为方向样例。'
-        : result.status === 'canceled' ? `已取消${create ? '新建' : '打开'}画册` : result.message);
-    } catch { setMessage('桌面接口连接失败，请重试。'); }
-    finally { setChoosingAlbum(false); }
-  }
-
+  useEffect(() => { setSelection(pageId ? { kind: 'page', id: pageId } : null); }, [albumId, pageId]);
+  useEffect(() => {
+    if (selectedId && !state.canvas?.document.objects.some(object => object.id === selectedId)) setSelection(pageId ? { kind: 'page', id: pageId } : null);
+  }, [state.canvas, selectedId, pageId]);
   useEffect(() => {
     const element = workspace.current;
     if (!element) return;
-    /** 只更新查看比例；拦截滚轮默认行为，页面模型保持毫米尺寸。 */
+    /** 滚轮只改变查看比例，原始毫米尺寸保持不变。 */
     const onWheel = (event: WheelEvent): void => {
-      if (event.deltaY === 0) return;
+      if (!event.deltaY) return;
       event.preventDefault();
-      setZoom(value => Math.max(0.2, Math.min(2, value * (event.deltaY < 0 ? 1.08 : 1 / 1.08))));
+      if (interacting) return;
+      setZoom(value => Math.max(0.1, Math.min(2, value * (event.deltaY < 0 ? 1.08 : 1 / 1.08))));
     };
     element.addEventListener('wheel', onWheel, { passive: false });
     return () => element.removeEventListener('wheel', onWheel);
+  }, [interacting]);
+
+  /** 串行提交界面命令；主进程另有互斥，失败与取消均不显示成功。 */
+  const execute = useCallback(async (operation: () => Promise<AlbumResult<unknown>>, success: string): Promise<boolean> => {
+    if (localLock.current) return false;
+    localLock.current = true; setPending(true);
+    try {
+      const result = await operation();
+      setMessage(result.status === 'success' ? success : result.status === 'error' ? result.message : '已取消操作');
+      return result.status === 'success';
+    } catch (error) { setMessage(`操作失败：${error instanceof Error ? error.message : String(error)}`); return false; }
+    finally { localLock.current = false; setPending(false); }
   }, []);
+  /** 选择属于编辑状态，位置和尺寸始终来自正式页面模型。 */
+  const selectObject = useCallback((id: string | null): void => { setSelection(id ? { kind: 'image', id } : null); }, []);
+  const moveObject = useCallback((id: string, xMm: number, yMm: number): void => {
+    if (albumId && pageId) void execute(() => window.desktop.movePageImage(albumId, pageId, id, xMm, yMm), '图片位置已修改，请保存。');
+  }, [albumId, pageId, execute]);
+  /** 控制点和尺寸表单共用一次几何提交；尺寸修改与移动一样进入手动保存草稿。 */
+  const resizeObject = useCallback((id: string, geometry: ImageGeometry): Promise<boolean> => {
+    return albumId && pageId ? execute(() => window.desktop.resizePageImage(albumId, pageId, id, geometry), '图片大小已修改，请保存。') : Promise.resolve(false);
+  }, [albumId, pageId, execute]);
+  useEffect(() => {
+    /** Delete 仅在画布或页面对象区域生效，输入框和素材树不触发真实文件删除。 */
+    const onKey = (event: KeyboardEvent): void => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (event.key !== 'Delete' || busy || !albumId || !pageId || !selection || document.querySelector('dialog[open]')
+        || target?.closest('input, textarea, select, [contenteditable=true]') || !target?.closest('.canvas-panel, .pages-panel')) return;
+      event.preventDefault();
+      if (selection.kind === 'image') void execute(() => window.desktop.deletePageImage(albumId, pageId, selection.id), '图片及本页副本已删除。');
+      else void execute(() => window.desktop.deletePage(albumId, selection.id), '画布已删除，页码已更新。');
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [busy, albumId, pageId, selection, execute]);
 
-  /** 根据可见区域计算查看比例，不改变 A4 页面尺寸或对象排版。 */
+  /** 根据可见区域调整缩放，不更改物理尺寸。 */
   function fitPage(): void {
-    const area = workspace.current;
-    if (!area) return;
-    setZoom(Math.max(0.2, Math.min(2, (area.clientWidth - 96) / (size.width * mmToPixels),
-      (area.clientHeight - 128) / (size.height * mmToPixels))));
+    if (workspace.current) setZoom(Math.max(0.1, Math.min(2, (workspace.current.clientWidth - 96) / (size.width * mmToPixels),
+      (workspace.current.clientHeight - 128) / (size.height * mmToPixels))));
   }
-
-  /** 调用受限 preload 接口；保存路径只能由原生对话框选择。 */
-  async function exportPdf(): Promise<void> {
+  /** 独立样例导出明确保留名称，真实画册 PDF 在后续阶段实现。 */
+  async function exportSample(): Promise<void> {
     setExporting(true);
-    setMessage('正在生成双页 A4 样例…');
     try {
       const result = await window.desktop.exportSamplePdf();
-      setMessage(result.canceled ? '已取消导出' : `样例已导出：${result.filePath}`);
-    } catch (error) {
-      setMessage(`导出失败：${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setExporting(false);
-    }
+      setMessage(result.canceled ? '已取消样例导出' : `样例已导出：${result.filePath}`);
+    } catch (error) { setMessage(`样例导出失败：${String(error)}`); }
+    finally { setExporting(false); }
+  }
+  /** 当前页 ID 显式传入，避免延迟事件写入刚切换的新页。 */
+  function changeOrientation(value: Orientation): void {
+    if (albumId && pageId && !busy) void execute(() => window.desktop.setPageOrientation(albumId, pageId, value), '编辑视角已修改，请保存。');
   }
 
-  return <div className="app-shell" style={layoutStyle} data-app-ready={info ? 'true' : undefined}>
-    <header className="app-header">
-      <div className="brand"><span className="brand-mark">册</span><div><strong>画册工坊</strong><span>留住每一页记忆</span></div></div>
-      <div className="document-title">{albumState.album?.name ?? '尚未打开画册'} <span className="preview-badge">{albumState.album ? '素材管理' : '框架预览'}</span></div>
-      <button className="primary-button" onClick={() => { void exportPdf(); }} disabled={exporting}>
-        <span aria-hidden="true">↗</span> {exporting ? '正在导出…' : '导出样例 PDF'}
-      </button>
-    </header>
-
-    <nav className="toolbar" aria-label="画册工具">
-      <div className="toolbar-group">
-        <button disabled={!albumReady || albumState.busy || choosingAlbum} data-new-project onClick={() => { void chooseAlbum(true); }}>＋ 新建画册</button>
-        <button disabled={!albumReady || albumState.busy || choosingAlbum} onClick={() => { void chooseAlbum(false); }}>打开画册</button>
-        <button disabled title={unavailable}>保存</button>
-      </div>
-      <span className="toolbar-divider" />
-      <div className="toolbar-group">
-        <button disabled title="图片排版将在后续阶段接入">添加图片</button>
-        <button disabled title="文字排版将在后续阶段接入">横排文字</button>
-        <button disabled title="文字排版将在后续阶段接入">竖排文字</button>
-      </div>
-      <div className="toolbar-note">手工排版 · 自由记录</div>
-    </nav>
-
-    <main className="editor-layout">
-      <AssetsPanel state={albumState} onMessage={setMessage} />
-
+  return <div className="app-shell" style={layoutStyle} data-app-ready={info && ready ? 'true' : undefined}>
+    <header className="app-header"><div className="brand"><span className="brand-mark">册</span><div><strong>画册工坊</strong><span>留住每一页记忆</span></div></div>
+      <div className="document-title">{state.album?.name ?? '尚未打开画册'}{state.canvas?.dirty && <span className="unsaved-mark"> · 未保存</span>}</div>
+      <button className="primary-button" disabled={exporting || busy} onClick={() => { void exportSample(); }}>↗ {exporting ? '正在导出…' : '导出样例 PDF'}</button></header>
+    <nav className="toolbar" aria-label="画册工具"><div className="toolbar-group">
+      <button disabled={!ready || busy} data-new-project onClick={() => { void execute(() => window.desktop.createAlbum(), '画册已创建，请在右侧新建画布。'); }}>＋ 新建画册</button>
+      <button disabled={!ready || busy} onClick={() => { void execute(() => window.desktop.openAlbum(), '画册已打开。'); }}>打开画册</button>
+      <button disabled={busy || !state.canvas?.dirty} data-save-page onClick={() => { void execute(() => window.desktop.savePage(), '当前画布已保存。'); }}>保存</button></div>
+      <span className="toolbar-divider" /><div className="toolbar-group"><span className="toolbar-instruction">从左侧拖入图片</span>
+        <button disabled title="文字排版将在后续阶段接入">横排文字</button><button disabled title="文字排版将在后续阶段接入">竖排文字</button></div>
+      <div className="toolbar-note">手工排版 · 自由记录</div></nav>
+    <main className="editor-layout"><AssetsPanel state={{ ...state, busy }} onMessage={setMessage} />
       <PanelDivider side="left" width={leftWidth} onChange={setLeftWidth} />
-
-      <section className="canvas-panel" aria-label="画布预览">
-        <div className="canvas-toolbar"><div><strong>A4 样例预览</strong><span>{size.width} × {size.height} mm</span></div>
-          <div className="segmented" aria-label="页面方向">
-            <button aria-pressed={orientation === 'portrait'} onClick={() => setOrientation('portrait')}>竖版</button>
-            <button aria-pressed={orientation === 'landscape'} onClick={() => setOrientation('landscape')}>横版</button>
-          </div>
-        </div>
-        <div className="workspace" ref={workspace} data-workspace>
-          <div className="canvas-stage">
-            <div className="page-label">{page.name}<span>A4 / {orientation === 'portrait' ? 'PORTRAIT' : 'LANDSCAPE'}</span></div>
+      <section className="canvas-panel" aria-label="画布编辑" tabIndex={-1} data-resizing={interacting}>
+        <div className="canvas-toolbar"><div><strong>{current?.name ?? 'A4 画布'}</strong><span>{size.width} × {size.height} mm</span></div>
+          <div className="segmented" aria-label="页面方向"><button disabled={!pageId || busy} data-orientation-button="portrait" aria-pressed={orientation === 'portrait'} onClick={() => changeOrientation('portrait')}>竖版</button>
+            <button disabled={!pageId || busy} data-orientation-button="landscape" aria-pressed={orientation === 'landscape'} onClick={() => changeOrientation('landscape')}>横版</button></div></div>
+        <div className="workspace" ref={workspace} data-workspace><div className="canvas-stage">
+          {state.canvas && albumId ? <><div className="page-label">{current?.name}<span>A4 / {orientation === 'portrait' ? 'PORTRAIT' : 'LANDSCAPE'}</span></div>
             <div className="scaled-page" style={{ width: size.width * mmToPixels * zoom, height: size.height * mmToPixels * zoom }}>
-              <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }}><PagePreview page={page} /></div>
-            </div>
-            <div className="canvas-hint">滚轮缩放查看比例，纸张尺寸保持不变</div>
-          </div>
-        </div>
-        <div className="canvas-bottom"><span>固定样例 · 尚未接入画册页面</span><div className="zoom-controls">
-          <button aria-label="缩小画布" onClick={() => setZoom(value => Math.max(0.2, value - 0.1))}>−</button>
-          <output data-zoom-value={zoom}>{Math.round(zoom * 100)}%</output>
-          <button aria-label="放大画布" data-zoom-in onClick={() => setZoom(value => Math.min(2, value + 0.1))}>＋</button>
-          <span className="toolbar-divider" /><button data-fit-page onClick={fitPage}>适应窗口</button>
+              <div className="canvas-view" style={{ width: `${size.width}mm`, height: `${size.height}mm`, transform: `scale(${zoom})`, transformOrigin: 'top left' }}>
+                <CanvasEditor key={`${albumId}/${pageId}`} canvas={state.canvas} albumId={albumId} zoom={zoom} busy={busy} selectedId={selectedId}
+                  onSelect={selectObject} onMove={moveObject} onResize={resizeObject} onInteraction={setInteracting} onMessage={setMessage} onDropAsset={path => {
+                    if (pageId) void execute(() => window.desktop.addPageImage(albumId, pageId, path), '图片已加入当前画布并保存，可选中后拖动位置。');
+                  }} /></div></div>
+            <div className="canvas-hint">四角等比例 · 边中点拉伸 · 右击图片名调整尺寸</div></>
+            : <div className="no-page" data-no-page><span aria-hidden="true">▱</span><h2>{state.album ? '创建第一张画布' : '开始制作你的画册'}</h2>
+              <p>{state.album ? '点击右侧“新建画布”，再从左侧拖入图片。' : '先新建或打开画册，再创建 A4 画布。'}</p></div>}
         </div></div>
-      </section>
-
-      <PanelDivider side="right" width={rightWidth} onChange={setRightWidth} />
-
-      <aside className="side-panel pages-panel" aria-label="画布与对象">
-        <div className="panel-heading"><h2>画布与对象</h2><span className="count-badge">2</span></div>
-        <div className="panel-subtitle">当前显示两张方向样例</div>
-        <div className="page-list">{previewPages.map((item, index) => <button key={item.id}
-          className={`page-row ${item.id === page.id ? 'selected' : ''}`} data-page-button={item.id}
-          aria-current={item.id === page.id ? 'page' : undefined} onClick={() => setOrientation(item.orientation)}>
-          <span className={`page-icon ${item.orientation}`} aria-hidden="true" />
-          <span><strong>{item.name}</strong><small>第 {index + 1} 页 · A4</small></span><span className="page-number">{String(index + 1).padStart(2, '0')}</span>
-        </button>)}</div>
-        <button className="add-page" disabled title={unavailable}>＋ 新建画布</button>
-        <div className="page-details"><h3>当前页面</h3><dl><div><dt>纸张</dt><dd>A4</dd></div><div><dt>方向</dt><dd>{orientation === 'portrait' ? '竖版' : '横版'}</dd></div><div><dt>宽度</dt><dd>{size.width} mm</dd></div><div><dt>高度</dt><dd>{size.height} mm</dd></div></dl></div>
-        <div className="panel-tip">后续可展开画布，选择图片和文字对象，调整叠层顺序。</div>
-        <div className="panel-footer">样例内容仅用于预览与导出验证</div>
-      </aside>
-    </main>
-
-    <footer className="status-bar"><span className="status-message" role="status">{message}</span><span>本地画册 · A4</span><span>v{info?.version ?? '—'}</span></footer>
+        <div className="canvas-bottom"><span>{state.canvas?.dirty ? '当前画布有未保存修改' : pageId ? '画布已保存' : '尚无画布'}</span><div className="zoom-controls">
+          <button aria-label="缩小画布" disabled={interacting} onClick={() => setZoom(value => Math.max(0.1, value - 0.1))}>−</button><output data-zoom-value={zoom}>{Math.round(zoom * 100)}%</output>
+          <button aria-label="放大画布" data-zoom-in disabled={interacting} onClick={() => setZoom(value => Math.min(2, value + 0.1))}>＋</button>
+          <span className="toolbar-divider" /><button data-fit-page disabled={!pageId || interacting} onClick={fitPage}>适应窗口</button></div></div>
+      </section><PanelDivider side="right" width={rightWidth} onChange={setRightWidth} />
+      <PagesPanel state={{ ...state, busy }} selectedId={selectedId} onResize={resizeObject} onSelectObject={id => setSelection({ kind: 'image', id })}
+        onSelectPage={id => {
+          if (id === pageId) setSelection({ kind: 'page', id });
+          else if (albumId) void execute(() => window.desktop.selectPage(albumId, id), '画布已切换。');
+        }} onCreate={(name, direction) => albumId ? execute(() => window.desktop.createPage(albumId, name, direction), '画布已创建。') : Promise.resolve(false)}
+        onRename={(id, name) => albumId ? execute(() => window.desktop.renamePage(albumId, id, name), '画布已改名。') : Promise.resolve(false)}
+        onReorder={(id, direction) => { if (albumId) void execute(() => window.desktop.reorderPage(albumId, id, direction), '页序已更新，固定目录编号保持。'); }}
+        onDelete={id => { if (albumId) void execute(() => window.desktop.deletePage(albumId, id), '画布已删除，页码已更新。'); }} />
+    </main><footer className="status-bar"><span className="status-message" role="status">{message}</span><span>本地画册 · A4</span><span>v{info?.version ?? '—'}</span></footer>
   </div>;
 }

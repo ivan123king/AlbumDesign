@@ -1,4 +1,4 @@
-/** 文件用途：定义框架预览与有限进程通信的共享类型，不包含持久化业务。 */
+/** 文件用途：定义框架样例类型并整合受限桌面接口，真实画册模型独立维护。 */
 import type { AlbumApi } from './album';
 export type Orientation = 'portrait' | 'landscape';
 

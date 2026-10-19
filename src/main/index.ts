@@ -9,6 +9,7 @@ import { runFrameworkSmoke } from './smoke';
 import { AlbumController } from './album-ipc';
 import { declareImageProtocol, installImageProtocol } from './image-validator';
 import { runAlbumSmoke } from './album-smoke';
+import { runPageSmoke } from './page-smoke';
 
 declareImageProtocol();
 
@@ -115,13 +116,13 @@ async function chooseSamplePdf(): Promise<SamplePdfResult> {
   }
 }
 
-/** 安装原生菜单，画册入口与界面共用控制器，未实现的页面保存保持禁用。 */
+/** 安装原生菜单，画册入口及手动保存与界面共用控制器和忙碌状态。 */
 function installMenu(albums: AlbumController): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: '文件', submenu: [
       { id: 'create-album', label: '新建画册…', click: () => { void albums.chooseAlbum(true); } },
       { id: 'open-album', label: '打开画册…', click: () => { void albums.chooseAlbum(false); } },
-      { label: '保存', enabled: false },
+      { id: 'save-page', label: '保存', accelerator: 'CmdOrCtrl+S', enabled: false, click: () => { void albums.savePage(); } },
       { type: 'separator' },
       { label: '导出双页 A4 样例…', click: () => {
         void chooseSamplePdf().catch(error => dialog.showErrorBox('导出失败', String(error)));
@@ -167,11 +168,20 @@ async function bootstrap(): Promise<void> {
   albums.register();
   installMenu(albums);
   mainWindow = createWindow(smokeMode);
+  let closeApproved = false;
+  mainWindow.on('close', event => {
+    if (closeApproved) return;
+    event.preventDefault();
+    void albums.canClose().then(allowed => {
+      if (allowed && mainWindow) { closeApproved = true; mainWindow.close(); }
+    });
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
   await loadRenderer(mainWindow);
   if (smokeMode) {
     await runFrameworkSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), exportSamplePdf);
     await runAlbumSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
+    await runPageSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
     app.quit();
   }
 }

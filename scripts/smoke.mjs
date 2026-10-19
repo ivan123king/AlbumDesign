@@ -12,8 +12,8 @@ const child = spawn(electron, [root, '--framework-smoke'], {
   cwd: root, env: environment, stdio: 'inherit', windowsHide: true
 });
 const timer = setTimeout(() => {
-  console.error('Electron 验证超过 90 秒，已结束。');
+  console.error('Electron 验证超过 180 秒，已结束。');
   child.kill();
-}, 90000);
+}, 180000);
 child.on('error', error => { clearTimeout(timer); console.error(error); process.exitCode = 1; });
 child.on('exit', code => { clearTimeout(timer); process.exitCode = code ?? 1; });

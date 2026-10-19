@@ -3,7 +3,7 @@ import type { BrowserWindow } from 'electron';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/** 在真实 Chromium 中验证桥接、隔离、页面切换、缩放、侧栏调整与窗口适配。 */
+/** 在真实 Chromium 中验证桥接、隔离、空画册界面、缩放、侧栏与窗口适配。 */
 export async function runFrameworkSmoke(
   window: BrowserWindow,
   output: string,
@@ -20,36 +20,22 @@ export async function runFrameworkSmoke(
     const info = await window.desktop.getAppInfo();
     check(info.electron && info.version, 'preload 通信失败');
     check(typeof window.require === 'undefined' && typeof window.process === 'undefined', 'Node 隔离失败');
-    check(document.querySelectorAll('[data-page-button]').length === 2, '页面列表不完整');
-    const paper = () => document.querySelector('[data-paper]');
-    check(paper().dataset.orientation === 'portrait', '初始方向错误');
-    const before = {width: paper().offsetWidth, height: paper().offsetHeight};
+    check(document.querySelector('[data-no-page]') && !document.querySelector('[data-paper]'), '未打开画册时不应显示业务页面');
     document.querySelector('[data-zoom-in]').click();
     await wait();
-    check(paper().offsetWidth === before.width && paper().offsetHeight === before.height, '查看缩放修改了页面尺寸');
     check(Number(document.querySelector('[data-zoom-value]').dataset.zoomValue) > 0.65, '缩放按钮无效');
     const zoomBeforeWheel = Number(document.querySelector('[data-zoom-value]').dataset.zoomValue);
     document.querySelector('[data-workspace]').dispatchEvent(new WheelEvent('wheel', {deltaY:-100, bubbles:true, cancelable:true}));
     await wait();
     check(Number(document.querySelector('[data-zoom-value]').dataset.zoomValue) > zoomBeforeWheel, '滚轮缩放无效');
-    document.querySelector('[data-page-button="preview-landscape"]').click();
-    await wait();
-    check(paper().dataset.orientation === 'landscape' && paper().offsetWidth > paper().offsetHeight, '横版切换失败');
-    document.querySelector('[data-page-button="preview-portrait"]').click();
-    await wait();
     const divider = document.querySelector('[data-divider="left"]');
     const originalWidth = document.querySelector('[data-left-panel]').getBoundingClientRect().width;
     divider.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}));
     await wait();
     check(document.querySelector('[data-left-panel]').getBoundingClientRect().width > originalWidth, '侧栏宽度调整失败');
     check(!document.querySelector('[data-new-project]').disabled, '新建画册入口未启用');
-    document.querySelector('[data-fit-page]').click();
-    await wait();
-    const pageBounds = paper().getBoundingClientRect();
-    const areaBounds = document.querySelector('[data-workspace]').getBoundingClientRect();
-    check(pageBounds.width <= areaBounds.width && pageBounds.height <= areaBounds.height, '适应窗口失败');
-    check(document.querySelector('[data-workspace]').scrollHeight <= document.querySelector('[data-workspace]').clientHeight + 2, '适应窗口后仍有多余纵向滚动');
-    return {info, isolation:true, pageSwitch:true, zoom:true, wheelZoom:true, panelResize:true, fitPage:true};
+    check(document.querySelector('[data-fit-page]').disabled, '没有画布时适应窗口应禁用');
+    return {info, isolation:true, emptyState:true, zoom:true, wheelZoom:true, panelResize:true};
   })()`);
   await writeFile(join(output, 'desktop.png'), (await window.webContents.capturePage()).toPNG());
   window.setSize(1000, 680);
