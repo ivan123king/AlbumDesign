@@ -1,7 +1,7 @@
 /** 文件用途：图片和文字共用跟随角度的选框，局部预览四角/八点缩放与中心自由旋转。 */
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent, RefObject } from 'react';
-import { normalizeAngle, objectView, resizeHandles, resizeObjectGeometry } from '../../../shared/canvas';
+import { normalizeAngle, objectView, textBaseSize, resizeHandles, resizeObjectGeometry } from '../../../shared/canvas';
 import type { CanvasObject, ObjectGeometry, ResizeHandle } from '../../../shared/canvas';
 import type { Orientation } from '../../../shared/framework';
 
@@ -34,7 +34,7 @@ export function paintObject(element: HTMLElement, object: CanvasObject, geometry
   element.style.left = `${geometry.xMm}mm`; element.style.top = `${geometry.yMm}mm`;
   element.style.width = `${geometry.widthMm}mm`; element.style.height = `${geometry.heightMm}mm`;
   element.style.transform = `rotate(${rotation}deg)`;
-  if (object.kind === 'text') element.style.setProperty('--text-scale', String(geometry.widthMm / object.layoutWidthMm));
+  if (object.kind === 'text') element.style.setProperty('--text-scale', String(geometry.widthMm / textBaseSize(object).widthMm));
 }
 
 /** 选框与对象中心重合并随对象旋转，顶部旋转钮与顶边缩放圆点分开。 */

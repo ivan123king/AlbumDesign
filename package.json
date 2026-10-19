@@ -14,6 +14,7 @@
     "start": "electron-vite preview",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "smoke:text": "npm run build && node scripts/smoke.mjs --text",
+    "smoke:layers": "npm run build && node scripts/smoke.mjs --layers",
     "package": "npm run build && node scripts/package.mjs"
   },
   "dependencies": {

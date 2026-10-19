@@ -4,7 +4,7 @@ import { join, extname, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AlbumPageReference } from '../shared/album';
 import type { CanvasDocument, CanvasSnapshot, ImageGeometry, ImageObject, TextDraft, TextObject } from '../shared/canvas';
-import { fitImage, normalizeAngle } from '../shared/canvas';
+import { fitImage, normalizeAngle, objectNameError, textBaseSize } from '../shared/canvas';
 import { getTextFonts, textFontFamilies } from './text-fonts';
 import type { Orientation } from '../shared/framework';
 import { AlbumStore, publishExclusive } from './album-store';
@@ -24,6 +24,12 @@ function assertPageName(value: unknown): asserts value is string {
 
 /** 文字排版参数在 IPC 和读盘时共用校验，禁止无效尺寸、样式和过量内容。 */
 function validateText(draft: TextDraft): void {
+  const bounds = draft?.contentBounds;
+  if (bounds !== undefined && (!bounds || ![bounds.xMm, bounds.yMm, bounds.widthMm, bounds.heightMm].every(Number.isFinite)
+    || Math.abs(bounds.xMm) > 100000 || Math.abs(bounds.yMm) > 100000
+    || bounds.widthMm < 1 || bounds.heightMm < 1 || bounds.widthMm > 100000 || bounds.heightMm > 100000)) {
+    throw new Error('文字内容边界无效，请重新编辑文字。');
+  }
   if (!draft || typeof draft.text !== 'string' || !draft.text.trim() || draft.text.length > 100000
     || !['horizontal', 'vertical'].includes(draft.writingMode) || !textFontFamilies.includes(draft.fontFamily)
     || typeof draft.color !== 'string' || !/^#[0-9a-f]{6}$/iu.test(draft.color)
@@ -53,6 +59,10 @@ export function parseCanvas(value: unknown): CanvasDocument {
       || Math.abs(item.xMm) > 100000 || Math.abs(item.yMm) > 100000 || item.widthMm <= 0 || item.heightMm <= 0
       || item.widthMm > 100000 || item.heightMm > 100000 || !Number.isFinite(item.rotation) || item.rotation < 0 || item.rotation >= 360
       || !Number.isSafeInteger(item.zIndex) || item.zIndex < 0 || layers.has(item.zIndex)) throw new Error('画布对象包含无效坐标、角度或叠层。');
+    if (item.displayName !== undefined) {
+      const error = objectNameError(item.displayName);
+      if (error) throw new Error(error);
+    }
     if (data.formatVersion === 1 && (item.kind !== 'image' || ![0, 90, 180, 270].includes(item.rotation))) throw new Error('旧版本页面不能保存文字或自由角度。');
     if (item.kind === 'image') {
       if (typeof item.fileName !== 'string' || !/^\d{3,}\.(?:jpg|jpeg|png)$/iu.test(item.fileName)
@@ -63,7 +73,7 @@ export function parseCanvas(value: unknown): CanvasDocument {
     } else {
       validateText(item);
       if (![item.layoutWidthMm, item.layoutHeightMm].every(size => Number.isFinite(size) && size >= 1 && size <= 100000)
-        || Math.abs(item.widthMm / item.layoutWidthMm - item.heightMm / item.layoutHeightMm) > 1e-7 * Math.max(1, item.widthMm / item.layoutWidthMm)) {
+        || Math.abs(item.widthMm / textBaseSize(item).widthMm - item.heightMm / textBaseSize(item).heightMm) > 1e-7 * Math.max(1, item.widthMm / textBaseSize(item).widthMm)) {
         throw new Error('文字框只允许等比例缩放。');
       }
     }
@@ -87,7 +97,7 @@ async function assertDeletableDirectory(path: string): Promise<void> {
   }
 }
 
-/** 只缓存当前页；位置、尺寸和视角草稿需要手动保存，结构性文件操作在无草稿时提交。 */
+/** 只缓存当前页；排版与叠层草稿需手动保存，结构性文件操作在无草稿时提交。 */
 export class PageStore {
   private active: { albumId: string; pageId: string; document: CanvasDocument; saved: CanvasDocument; text: string; warnings: string[] } | null = null;
 
@@ -102,7 +112,7 @@ export class PageStore {
 
   get dirty(): boolean { return !!this.active && JSON.stringify(this.active.document) !== JSON.stringify(this.active.saved); }
 
-  /** 仅放弃尚未提交的位置、尺寸和方向，不删除已完成的图片导入或页面操作。 */
+  /** 放弃未提交的名称、文字、几何、叠层与方向，不删除已完成的图片导入或页面操作。 */
   discard(): void { if (this.active) this.active.document = structuredClone(this.active.saved); }
 
   /** 根据清单中的稳定 ID 查页，拒绝界面直接提供目录编号或磁盘路径。 */
@@ -289,6 +299,33 @@ export class PageStore {
     object.widthMm = geometry.widthMm; object.heightMm = geometry.heightMm;
   }
 
+  /** 名称只更新当前页对象草稿；null 删除自定义字段，无效名称或失效目标不产生部分修改。 */
+  renameObject(albumId: string, pageId: string, objectId: string, name: string | null): void {
+    const active = this.current(albumId, pageId);
+    if (name !== null) {
+      const error = objectNameError(name);
+      if (error) throw new Error(error);
+    }
+    const object = active.document.objects.find(item => item.id === objectId);
+    if (!object) throw new Error('对象不存在。');
+    if (name === null) delete object.displayName;
+    else object.displayName = name.trim();
+  }
+
+  /** targetIndex 为从顶层起的零基位置；仅调整当前页叠层草稿，无效对象或位置拒绝且不部分修改。 */
+  reorderObject(albumId: string, pageId: string, objectId: string, targetIndex: number): void {
+    const active = this.current(albumId, pageId);
+    const ordered = [...active.document.objects].sort((a, b) => b.zIndex - a.zIndex);
+    const sourceIndex = ordered.findIndex(item => item.id === objectId);
+    if (sourceIndex < 0) throw new Error('图层对象不存在。');
+    if (!Number.isSafeInteger(targetIndex) || targetIndex < 0 || targetIndex >= ordered.length) throw new Error('图层目标位置无效。');
+    if (sourceIndex === targetIndex) return;
+    const [object] = ordered.splice(sourceIndex, 1);
+    ordered.splice(targetIndex, 0, object!);
+    // zIndex 是唯一叠层依据；连续编号仅用于叠放，不改对象 ID、图片编号或数组存储顺序。
+    ordered.forEach((item, index) => { item.zIndex = ordered.length - index - 1; });
+  }
+
   /** 自由旋转只修改自身角度，不改变中心、长宽或叠层；保存时才升级旧页面格式。 */
   rotate(albumId: string, pageId: string, objectId: string, angle: number): void {
     const active = this.current(albumId, pageId);
@@ -310,11 +347,16 @@ export class PageStore {
     if (position && (![position.xMm, position.yMm].every(Number.isFinite) || Math.abs(position.xMm) > 100000 || Math.abs(position.yMm) > 100000)) throw new Error('文字位置无效。');
     const cx = previous ? previous.xMm + previous.widthMm / 2 : position?.xMm ?? 105;
     const cy = previous ? previous.yMm + previous.heightMm / 2 : position?.yMm ?? 148.5;
-    const object: TextObject = { ...draft, kind: 'text', id: previous?.id ?? randomUUID(),
-      xMm: cx - draft.widthMm / 2, yMm: cy - draft.heightMm / 2,
+    const widthMm = draft.contentBounds?.widthMm ?? draft.widthMm;
+    const heightMm = draft.contentBounds?.heightMm ?? draft.heightMm;
+    const object: TextObject = { ...draft, kind: 'text', id: previous?.id ?? randomUUID(), widthMm, heightMm,
+      xMm: cx - widthMm / 2, yMm: cy - heightMm / 2,
       rotation: previous?.rotation ?? (active.document.orientation === 'landscape' ? 90 : 0),
       zIndex: previous?.zIndex ?? Math.max(-1, ...active.document.objects.map(item => item.zIndex)) + 1,
       layoutWidthMm: draft.widthMm, layoutHeightMm: draft.heightMm };
+    // 正文编辑沿用独立名称；恢复默认后保持字段缺省，摘要继续随正文变化。
+    delete object.displayName;
+    if (previous?.displayName !== undefined) object.displayName = previous.displayName;
     const next: CanvasDocument = { ...active.document, formatVersion: 2,
       objects: previous ? active.document.objects.map(item => item.id === objectId ? object : item) : [...active.document.objects, object] };
     parseCanvas(next);

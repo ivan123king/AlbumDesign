@@ -10,6 +10,8 @@ export interface ObjectGeometry {
 
 export interface ObjectBase extends ObjectGeometry {
   id: string;
+  /** 仅用于管理的自定义名称；缺省时显示来源文件名或文字摘要。 */
+  displayName?: string;
   rotation: number;
   zIndex: number;
 }
@@ -21,6 +23,8 @@ export interface ImageObject extends ObjectBase {
 }
 
 export type WritingMode = 'horizontal' | 'vertical';
+/** 浏览器按实际字体测得的内容边界，单位毫米；与排版区分离以免收紧后重新换行。 */
+export interface TextContentBounds { xMm: number; yMm: number; widthMm: number; heightMm: number }
 export interface TextDraft {
   text: string;
   writingMode: WritingMode;
@@ -33,6 +37,7 @@ export interface TextDraft {
   columnGapMm: number;
   widthMm: number;
   heightMm: number;
+  contentBounds?: TextContentBounds;
 }
 
 /** 固定排版区域与最终显示尺寸分开，等比缩放只改变后者，不重新换行或换列。 */
@@ -40,6 +45,11 @@ export interface TextObject extends ObjectBase, Omit<TextDraft, 'widthMm' | 'hei
   kind: 'text';
   layoutWidthMm: number;
   layoutHeightMm: number;
+}
+
+/** 旧文字沿用整个排版区；新文字以内容边界为基础尺寸，缩放不改变排版。 */
+export function textBaseSize(object: TextObject): { widthMm: number; heightMm: number } {
+  return object.contentBounds ?? { widthMm: object.layoutWidthMm, heightMm: object.layoutHeightMm };
 }
 
 export type CanvasObject = ImageObject | TextObject;
@@ -88,9 +98,20 @@ export function objectView(object: ObjectBase, orientation: Orientation): { x: n
     angle: object.rotation - (orientation === 'landscape' ? 90 : 0) };
 }
 
-/** 右侧名称只作显示，文字不消耗图片文件编号。 */
-export function objectLabel(object: CanvasObject): string {
+/** 名称不作为文件路径；界面、IPC 与读盘共用长度及控制字符校验。 */
+export function objectNameError(value: unknown): string | null {
+  return typeof value !== 'string' || !value.trim() || value.length > 120 || /[\u0000-\u001f\u007f]/u.test(value)
+    ? '对象名称需为 1～120 个字符，不能包含换行或控制字符。' : null;
+}
+
+/** 默认名称随来源或正文生成，不写入自定义字段，便于恢复默认。 */
+export function defaultObjectLabel(object: CanvasObject): string {
   return object.kind === 'image' ? object.sourceName : `${object.writingMode === 'horizontal' ? '横排' : '竖排'}文字：${object.text.replace(/\s+/gu, ' ').slice(0, 28)}`;
+}
+
+/** 所有管理界面优先使用自定义名称，文字不消耗图片文件编号。 */
+export function objectLabel(object: CanvasObject): string {
+  return object.displayName ?? defaultObjectLabel(object);
 }
 
 /** 对象自身尺寸以中心为锚点调整；文字比例由主进程再次校验。 */

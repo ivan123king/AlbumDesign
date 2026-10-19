@@ -263,6 +263,63 @@ export async function runTextSmoke(window: BrowserWindow, output: string, contro
     await window.webContents.executeJavaScript("document.querySelector('[data-fit-page]').click()");
     await capture(window, join(output, 'text-rotation-compact.png'));
     assert(await window.webContents.executeJavaScript('document.documentElement.scrollWidth <= window.innerWidth'));
+    // 验证实际字体测量后的紧包裹、竖排右侧起笔、多栏和保存重开，不只检查模型数值。
+    window.setSize(1440, 960);
+    for (const mode of ['horizontal', 'vertical', 'columns'] as const) {
+      await window.webContents.executeJavaScript(`document.querySelector('[data-add-text=${mode === 'vertical' ? 'vertical' : 'horizontal'}]').click()`);
+      await waitFor(window, "document.querySelector('.text-dialog[open]')");
+      await fill(window, 'text-content', mode === 'columns' ? '第一栏中文\n第二行文字\n第三行文字\n第四行文字\n第五行文字' : '上升空间分开时间段开市大吉');
+      if (mode === 'columns') { await fill(window, 'text-columns', '2'); await fill(window, 'text-heightMm', '25'); }
+      await window.webContents.executeJavaScript("document.querySelector('.text-dialog button[type=submit]').click()");
+      await waitFor(window, "!document.querySelector('.text-dialog') && !document.querySelector('.add-page').disabled");
+      const tight = (await state()).canvas!.document.objects.at(-1)! as TextObject;
+      assert(tight.contentBounds, '确认文字必须保存实测边界');
+      if (mode === 'horizontal') assert(tight.widthMm < 90 && tight.heightMm < 12);
+      if (mode === 'vertical') assert(tight.widthMm < 12 && tight.heightMm < 95);
+      await select(window, tight.id, 4);
+      const contained = await window.webContents.executeJavaScript(`(() => {
+        const item=[...document.querySelectorAll('[data-object-id]')].find(item=>item.dataset.objectId===${JSON.stringify(tight.id)});
+        const box=item.getBoundingClientRect(); const range=document.createRange(); range.selectNodeContents(item.querySelector('.text-flow'));
+        return [...range.getClientRects()].every(rect=>rect.left>=box.left-.1 && rect.right<=box.right+.1 && rect.top>=box.top-.1 && rect.bottom<=box.bottom+.1);
+      })()`);
+      assert(contained, mode + ' 文字不得被紧选框裁切');
+      await capture(window, join(output, `text-tight-${mode}.png`));
+      await window.webContents.executeJavaScript('window.desktop.savePage()');
+      const anotherId = (await state()).album!.pages.find(page => page.id !== pageId)!.id;
+      await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(albumId)},${JSON.stringify(anotherId)})`);
+      await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(albumId)},${JSON.stringify(pageId)})`);
+      assert.deepEqual(await object(tight.id), tight);
+      // 同时读取磁盘，验证内容边界与实际尺寸一并持久化。
+      const disk = JSON.parse(await readFile(join(moved, 'pages', '001', 'canvas.json'), 'utf8'));
+      assert.deepEqual(disk.objects.find((item: TextObject) => item.id === tight.id), tight);
+    }
+    // 菜单针对右击页而非当前页；首尾禁用、改名与顺序更新使用原业务接口。
+    assert.equal(await window.webContents.executeJavaScript("document.querySelector('.page-actions')"), null);
+    const openPageMenu = async (id: string): Promise<void> => {
+      const point = await window.webContents.executeJavaScript(`(() => { const row=[...document.querySelectorAll('[data-page-button]')].find(item=>item.dataset.pageButton===${JSON.stringify(id)}); const r=row.getBoundingClientRect(); return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}; })()`);
+      window.webContents.sendInputEvent({type:'mouseDown',...point,button:'right',clickCount:1});
+      window.webContents.sendInputEvent({type:'mouseUp',...point,button:'right',clickCount:1});
+      await waitFor(window, "document.querySelector('[aria-label=画布操作]')");
+    };
+    const secondPageId = (await state()).album!.pages.find(page => page.id !== pageId)!.id;
+    await openPageMenu(secondPageId);
+    assert.equal(await window.webContents.executeJavaScript("[...document.querySelectorAll('[aria-label=画布操作] button')].find(item=>item.textContent==='画布下移').disabled"), true);
+    await capture(window, join(output, 'page-context-menu.png'));
+    await window.webContents.executeJavaScript("[...document.querySelectorAll('[aria-label=画布操作] button')].find(item=>item.textContent==='改名').click()");
+    await waitFor(window, "document.querySelector('.page-dialog[open]')"); await fill(window, 'page-name', '右键改名验证');
+    await window.webContents.executeJavaScript("document.querySelector('.page-dialog button[type=submit]').click()");
+    await waitFor(window, "!document.querySelector('.page-dialog') && !document.querySelector('.add-page').disabled");
+    assert.equal((await state()).album!.pages.find(page=>page.id===secondPageId)!.name, '右键改名验证');
+    assert.equal((await state()).canvas!.pageId, pageId);
+    await openPageMenu(secondPageId);
+    await window.webContents.executeJavaScript("[...document.querySelectorAll('[aria-label=画布操作] button')].find(item=>item.textContent==='画布上移').click()");
+    await waitFor(window, "!document.querySelector('.add-page').disabled && !document.querySelector('[aria-label=画布操作]')");
+    assert.equal((await state()).album!.pages[0]!.id, secondPageId);
+    await openPageMenu(secondPageId);
+    assert.equal(await window.webContents.executeJavaScript("[...document.querySelectorAll('[aria-label=画布操作] button')].find(item=>item.textContent==='画布上移').disabled"), true);
+    await window.webContents.executeJavaScript("[...document.querySelectorAll('[aria-label=画布操作] button')].find(item=>item.textContent==='删除画布').click()");
+    await waitFor(window, "!document.querySelector('.add-page').disabled && !document.querySelector('[aria-label=画布操作]')");
+    assert(!(await state()).album!.pages.some(page=>page.id===secondPageId));
     await window.webContents.executeJavaScript(`window.desktop.deletePageObject(${JSON.stringify(albumId)},${JSON.stringify(pageId)},${JSON.stringify(horizontalId)})`);
     assert(!(await state()).canvas!.document.objects.some(item => item.id === horizontalId));
     assert.deepEqual(await readFile(join(moved, 'pages', '001', '001.png')), png);
@@ -272,6 +329,6 @@ export async function runTextSmoke(window: BrowserWindow, output: string, contro
     realRotationForTextAndImage: true, rotationCenterAndDimensionsPreserved: true, escapeCancelsRotation: true, resizeAfterFreeRotation: true,
     dragVerticalTextIntoPage: true,
     textEditAndPlainTextSafety: true, saveReopenAndMovedAlbum: true, textDeletePreservesImage: true,
-    textPrintSampleGenerated: true, compactLayout: true, nativeMouseManuallyVerified: false }, null, 2));
+    textPrintSampleGenerated: true, tightTextBounds: true, pageContextMenu: true, compactLayout: true, nativeMouseManuallyVerified: false }, null, 2));
   console.log('文字验收通过：横竖文字、四角等比、图片与文字自由旋转、编辑保存及打印样例已验证。');
 }

@@ -64,6 +64,10 @@ export type AlbumResult<T> =
  * 操作分别返回 success、canceled 或带中文原因的 error；连接中断仍可能拒绝 Promise。
  */
 export interface AlbumApi {
+  /** 修改当前页对象的显示名称，null 恢复默认；仅更新草稿，无效参数返回中文原因。 */
+  renamePageObject(albumId: string, pageId: string, objectId: string, name: string | null): Promise<AlbumResult<null>>;
+  /** 将对象移到当前页从顶层起的零基位置；修改草稿，失败返回中文原因。 */
+  reorderPageObject(albumId: string, pageId: string, objectId: string, targetIndex: number): Promise<AlbumResult<null>>;
   getAlbumState(): Promise<AlbumState>;
   createAlbum(): Promise<AlbumResult<null>>;
   openAlbum(): Promise<AlbumResult<null>>;

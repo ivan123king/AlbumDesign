@@ -95,6 +95,17 @@ export function App(): React.JSX.Element {
   }, [albumId, pageId, execute]);
   const editText = useCallback((object: TextObject): void => { setTextEditor({ object, mode: object.writingMode }); }, []);
 
+  /** 名称随对象排版进入当前页草稿，恢复默认同样由主进程校验并更新。 */
+  const renameObject = useCallback((id: string, name: string | null): Promise<boolean> => {
+    return albumId && pageId ? execute(() => window.desktop.renamePageObject(albumId, pageId, id, name),
+      name === null ? '已恢复默认名称，请保存。' : '对象已改名，请保存。') : Promise.resolve(false);
+  }, [albumId, pageId, execute]);
+
+  /** 列表拖动和四种菜单操作共用叠层接口，结果保留在当前页手动保存草稿中。 */
+  const reorderObject = useCallback((id: string, targetIndex: number): Promise<boolean> => {
+    return albumId && pageId ? execute(() => window.desktop.reorderPageObject(albumId, pageId, id, targetIndex), '图层顺序已修改，请保存。') : Promise.resolve(false);
+  }, [albumId, pageId, execute]);
+
   /** 确认表单才创建/更新文字，选中真实返回 ID，文本内容从不写入图片目录。 */
   function submitText(draft: TextDraft): Promise<boolean> {
     if (!albumId || !pageId || !textEditor) return Promise.resolve(false);
@@ -176,7 +187,7 @@ export function App(): React.JSX.Element {
           <button aria-label="放大画布" data-zoom-in disabled={interacting} onClick={() => setZoom(value => Math.min(2, value + 0.1))}>＋</button>
           <span className="toolbar-divider" /><button data-fit-page disabled={!pageId || interacting} onClick={fitPage}>适应窗口</button></div></div>
       </section><PanelDivider side="right" width={rightWidth} onChange={setRightWidth} />
-      <PagesPanel state={{ ...state, busy }} selectedId={selectedId} onResize={resizeObject} onRotate={rotateObject} onEditText={editText}
+      <PagesPanel state={{ ...state, busy }} selectedId={selectedId} onResize={resizeObject} onRotate={rotateObject} onEditText={editText} onReorderObject={reorderObject} onRenameObject={renameObject}
         onSelectObject={id => setSelection({ kind: 'image', id })}
         onSelectPage={id => {
           if (id === pageId) setSelection({ kind: 'page', id });

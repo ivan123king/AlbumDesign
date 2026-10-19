@@ -1,7 +1,7 @@
 /** 文件用途：绘制当前页图片与真实文字，处理素材/文字入口拖放和局部移动预览。 */
 import { memo, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent } from 'react';
-import { assetDragType, mmToPixels, objectLabel, objectView, screenDeltaToPaper, textDragType } from '../../../shared/canvas';
+import { assetDragType, mmToPixels, objectLabel, objectView, textBaseSize, screenDeltaToPaper, textDragType } from '../../../shared/canvas';
 import type { CanvasObject, CanvasSnapshot, ObjectGeometry, TextObject, WritingMode } from '../../../shared/canvas';
 import type { Orientation } from '../../../shared/framework';
 import { ObjectSelection } from './ObjectSelection';
@@ -67,7 +67,7 @@ const CanvasItem = memo(function CanvasItem({ object, albumId, pageId, orientati
     ref={element} data-object-id={object.id} data-object-kind={object.kind} role="button" tabIndex={0}
     aria-label={objectLabel(object)} aria-pressed={selected} style={{ left: `${object.xMm}mm`, top: `${object.yMm}mm`,
       width: `${object.widthMm}mm`, height: `${object.heightMm}mm`, transform: `rotate(${object.rotation}deg)`, zIndex: object.zIndex + 1,
-      '--text-scale': object.kind === 'text' ? object.widthMm / object.layoutWidthMm : 1 } as CSSProperties}
+      '--text-scale': object.kind === 'text' ? object.widthMm / textBaseSize(object).widthMm : 1 } as CSSProperties}
     onPointerDown={begin} onPointerMove={update} onPointerUp={event => end(event)} onPointerCancel={event => end(event, true)}
     onLostPointerCapture={event => { if (drag.current) end(event, true); }}
     onDoubleClick={event => { if (!busy && object.kind === 'text') { event.preventDefault(); onEditText(object); } }}

@@ -79,7 +79,8 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .object-selection .rotation-handle { position: absolute; left: 50%; top: calc(-30 * var(--selection-pixel)); transform: translate(-50%, -50%); width: calc(24 * var(--selection-pixel)); height: calc(24 * var(--selection-pixel)); padding: 0; border: calc(1.5 * var(--selection-pixel)) solid #567a3c; border-radius: 50%; background: #fff; color: #567a3c; font-size: calc(18 * var(--selection-pixel)); line-height: 1; pointer-events: auto; touch-action: none; cursor: grab; }
 .rotation-angle { position: absolute; left: 50%; top: calc(-60 * var(--selection-pixel)); transform: translateX(-50%); background: #fff; color: #526b40; padding: calc(3 * var(--selection-pixel)); border-radius: calc(3 * var(--selection-pixel)); font-size: calc(12 * var(--selection-pixel)); white-space: nowrap; }
 /* 文字排版区固定，缩放只作用于内层整体，保持中文换行、竖排列序与间距比例。 */
-.text-layout { position: absolute; top: 0; left: 0; box-sizing: border-box; padding: 2mm; overflow: clip; transform: scale(var(--text-scale, 1)); transform-origin: top left; pointer-events: none; }
+.text-viewport { position: absolute; inset: 0; overflow: clip; pointer-events: none; }
+.text-layout { position: absolute; top: 0; left: 0; box-sizing: border-box; padding: 2mm; transform-origin: top left; pointer-events: none; }
 .text-flow { width: 100%; height: 100%; white-space: pre-wrap; overflow-wrap: anywhere; column-fill: auto; }
 .text-overflow-hint { position: absolute; right: 0; bottom: 0; color: #a55235; background: #fff4dd; padding: 2px 4px; font-size: 11px; pointer-events: none; }
 .group-dialog.text-dialog { width: min(680px, 92vw); max-height: 90vh; overflow: auto; }
@@ -109,15 +110,23 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .object-list button { display: flex; align-items: center; gap: 7px; text-align: left; width: 100%; min-width: 0; border: 0; background: transparent; padding: 7px; border-radius: 4px; font-size: 11px; }
 .object-list button > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .object-list .selected { background: #e6eddd; color: #526a3e; }
+/* 图层拖动不改变行高，插入线直接标明松手后的上下位置。 */
+.object-list button { position: relative; cursor: grab; }
+.object-list button:disabled { cursor: default; }
+.object-list .layer-grip { flex: 0 0 auto; color: #88967b; }
+.object-list .layer-dragging { opacity: .45; }
+.object-list .layer-insert-before::before, .object-list .layer-insert-after::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; background: #567a3c; pointer-events: none; }
+.object-list .layer-insert-before::before { top: -1px; }
+.object-list .layer-insert-after::after { bottom: -1px; }
 .object-list small { font-size: 10px; color: #9aa38d; padding: 8px; }
-.page-actions { display: flex; gap: 5px; margin: 16px 14px 0; flex-wrap: wrap; }
-.page-actions button { font-size: 10px; border: 1px solid #d0d8c5; background: transparent; padding: 6px; border-radius: 4px; }
 .page-warning { font-size: 11px; color: #9c513b; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .page-dialog select { font: inherit; font-size: 12px; width: 100%; padding: 9px; border: 1px solid #bdc9ac; border-radius: 4px; background: white; }
 /* 对象右键菜单使用窗口坐标，尺寸对话框的只读宽度明确表示自动计算。 */
-.image-context-menu { position: fixed; z-index: 1000; width: 192px; padding: 5px; border: 1px solid #d2dac8; border-radius: 5px; background: #fcfcf9; box-shadow: 0 5px 20px #27351b24; }
+.image-context-menu { position: fixed; z-index: 1000; width: 192px; max-height: calc(100vh - 16px); overflow-y: auto; padding: 5px; border: 1px solid #d2dac8; border-radius: 5px; background: #fcfcf9; box-shadow: 0 5px 20px #27351b24; }
 .image-context-menu button { display: block; width: 100%; border: 0; background: transparent; padding: 10px; border-radius: 3px; font-size: 12px; text-align: left; }
-.image-context-menu button:hover { background: #eaf0e1; }
+.image-context-menu button:hover:not(:disabled) { background: #eaf0e1; }
+.image-context-menu button:disabled { color: #a0a795; }
+.context-menu-separator { height: 1px; margin: 4px 5px; background: #dce2d5; }
 .image-size-dialog .size-image-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-size-dialog input[readonly] { background: #edf0e8; color: #7c876f; }
 .image-size-dialog .size-proportion { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
@@ -141,6 +150,10 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .group-dialog input { width: 100%; padding: 10px; border: 1px solid #bdc9ac; border-radius: 4px; font: inherit; font-size: 13px; background: #fff; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 .dialog-actions button { padding: 8px 16px; border: 1px solid #bdc9ac; border-radius: 4px; font-size: 12px; }
+/* 对象名称表单沿用画布弹窗，恢复默认为独立操作，长来源名称允许换行。 */
+.object-name-dialog { max-height: 90vh; overflow-y: auto; }
+.object-name-dialog .object-name-error { color: #a55235; }
+.restore-object-name { padding: 7px 10px; border: 1px solid #bdc9ac; border-radius: 4px; font-size: 12px; }
 .panel-footer { margin-top: auto; padding: 18px 12px; text-align: center; font-size: 9px; color: #9ca292; border-top: 1px solid #eceee6; }
 .panel-divider { background: #e6e8df; cursor: col-resize; touch-action: none; }
 .panel-divider:hover { background: #a9b49c; }

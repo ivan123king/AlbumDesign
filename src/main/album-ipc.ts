@@ -44,7 +44,7 @@ export class AlbumController {
   private async guardDirty(): Promise<boolean> {
     if (!this.pages.dirty) return true;
     const answer = await dialog.showMessageBox(this.getWindow(), { type: 'question', title: '画布有未保存修改',
-      message: '是否保存当前画布的位置、尺寸与方向修改？', buttons: ['保存', '放弃修改', '取消'], defaultId: 0, cancelId: 2 });
+      message: '是否保存当前画布的修改（对象名称、图片、文字、图层与方向）？', buttons: ['保存', '放弃修改', '取消'], defaultId: 0, cancelId: 2 });
     if (answer.response === 2) return false;
     if (answer.response === 0) await this.pages.save(); else this.pages.discard();
     return true;
@@ -132,6 +132,14 @@ export class AlbumController {
           const rotation = value as { objectId: string; angle: number };
           if (!rotation || typeof rotation.objectId !== 'string') throw new Error('旋转参数无效。');
           this.pages.rotate(albumId, pageId, rotation.objectId, rotation.angle);
+        } else if (command === 'rename-object') {
+          const rename = value as { objectId: string; name: string | null };
+          if (!rename || typeof rename.objectId !== 'string') throw new Error('对象改名参数无效。');
+          this.pages.renameObject(albumId, pageId, rename.objectId, rename.name);
+        } else if (command === 'reorder-object') {
+          const order = value as { objectId: string; targetIndex: number };
+          if (!order || typeof order.objectId !== 'string') throw new Error('图层排序参数无效。');
+          this.pages.reorderObject(albumId, pageId, order.objectId, order.targetIndex);
         } else if (command === 'orientation') {
           this.pages.setOrientation(albumId, pageId, value as Orientation);
         } else {
