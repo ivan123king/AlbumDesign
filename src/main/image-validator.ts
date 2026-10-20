@@ -4,8 +4,16 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import type { ImageFormat } from './album-store';
+import { cropPixelBounds, cropShapePath, renderCrop, validateCrop } from '../shared/crop';
+import type { CropSettings, CropBounds } from '../shared/crop';
 
 const pendingImages = new Map<string, { path: string; format: ImageFormat }>();
+
+/** 裁剪弹框只持有随机只读令牌；释放后不能再读取该源图。 */
+export function leaseCropImage(path: string, format: ImageFormat): { token: string; url: string; release: () => void } {
+  const token = randomUUID(); pendingImages.set(token, { path, format });
+  return { token, url: `album-import://validate/${token}`, release: () => { pendingImages.delete(token); } };
+}
 
 /** 必须在 app.ready 前声明；协议只接受一次校验任务持有的随机令牌。 */
 export function declareImageProtocol(): void {
@@ -19,7 +27,7 @@ export function installPageImageProtocol(resolve: (albumId: string, pageId: stri
     try {
       const url = new URL(request.url);
       const parts = url.pathname.slice(1).split('/');
-      if (request.method !== 'GET' || url.hostname !== 'image' || url.search || parts.length !== 3
+      if (request.method !== 'GET' || url.hostname !== 'image' || (url.search && !/^\?v=\d{3,}\.(png|jpg|jpeg)$/iu.test(url.search)) || parts.length !== 3
         || parts.some(part => !/^[a-zA-Z0-9-]+$/u.test(part))) return new Response(null, { status: 404 });
       const path = await resolve(parts[0]!, parts[1]!, parts[2]!);
       const response = await net.fetch(pathToFileURL(path).href);
@@ -65,8 +73,16 @@ export class ImageValidationTask {
     return Buffer.from(result.thumbnail, 'base64');
   }
 
+  /** 原始像素裁剪及 PNG 编码仅在独立沙箱窗口执行；超限或全透明结果拒绝提交。 */
+  async crop(path: string, format: ImageFormat, settings: CropSettings): Promise<{ png: Buffer; bounds: CropBounds; width: number; height: number }> {
+    validateCrop(settings);
+    const result = await this.decode(path, format, false, settings);
+    if (!result.thumbnail || !result.bounds) throw new Error('裁剪结果无效。');
+    return { png: Buffer.from(result.thumbnail, 'base64'), bounds: result.bounds, width: result.width, height: result.height };
+  }
+
   /** 共用受限解码通道；小图字符串仅在后台与主进程间传递，不进入界面状态。 */
-  private async decode(path: string, format: ImageFormat, thumbnail: boolean): Promise<{ width: number; height: number; thumbnail?: string }> {
+  private async decode(path: string, format: ImageFormat, thumbnail: boolean, crop?: CropSettings): Promise<{ width: number; height: number; thumbnail?: string; bounds?: CropBounds }> {
     const file = await open(path, 'r');
     const header = Buffer.alloc(8);
     try { await file.read(header, 0, 8, 0); } finally { await file.close(); }
@@ -94,7 +110,7 @@ export class ImageValidationTask {
         try {
           const url = ${JSON.stringify(`album-import://validate/${token}`)};
           // ImageBitmap 不依赖隐藏窗口的图片呈现时机，并能在绘制后明确关闭原图像素。
-          const decoding = ${thumbnail} ? (async () => {
+          const decoding = ${thumbnail || !!crop} ? (async () => {
             const response = await fetch(url, { signal: controller.signal });
             if (!response.ok) throw new Error('图片读取失败');
             const decoded = await createImageBitmap(await response.blob(), { imageOrientation: 'from-image' });
@@ -105,6 +121,29 @@ export class ImageValidationTask {
             timer = setTimeout(() => reject(new Error('图片解码超时')), 30000);
           })]);
           const result = { width: bitmap ? bitmap.width : image.naturalWidth, height: bitmap ? bitmap.height : image.naturalHeight };
+          if (${!!crop}) {
+            if (result.width * result.height > 80000000 || Math.max(result.width, result.height) > 32767) throw new Error('图片过大，裁剪支持最长边 32767 像素且总像素不超过 8000 万。');
+            const settings = ${JSON.stringify(crop ?? null)};
+            const validateCrop = ${validateCrop.toString()};
+            const bounds = (${cropPixelBounds.toString()})(settings, result.width, result.height);
+            const output = (${renderCrop.toString()})(bitmap, result.width, result.height, settings, bounds, ${JSON.stringify(crop ? cropShapePath(crop.shape) : '')}, Infinity);
+            try {
+              const context = output.getContext('2d');
+              let visible = false;
+              // 逐行检查透明度，避免为完整像素副本额外分配一整张原图内存。
+              for (let y = 0; y < output.height && !visible; y++) {
+                const row = context.getImageData(0, y, output.width, 1).data;
+                for (let i = 3; i < row.length; i += 4) if (row[i]) { visible = true; break; }
+              }
+              if (!visible) throw new Error('裁剪后没有可见图片，请调整范围或反向裁剪设置。');
+              const blob = await new Promise(resolve => output.toBlob(resolve, 'image/png'));
+              if (!blob) throw new Error('PNG 编码失败。');
+              result.thumbnail = await new Promise((resolve, reject) => {
+                const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; reader.readAsDataURL(blob);
+              });
+              result.bounds = bounds;
+            } finally { output.width = 0; output.height = 0; }
+          }
           if (${thumbnail}) {
             const scale = Math.min(1, 256 / Math.max(result.width, result.height));
             const canvas = document.createElement('canvas');
@@ -132,6 +171,7 @@ export class ImageValidationTask {
       if (!valid.width || !valid.height) throw new Error('图片没有有效尺寸。');
       return valid;
     } catch (error) {
+      if (crop) throw new Error(`裁剪失败：${error instanceof Error ? error.message : String(error)}`);
       if (thumbnail) throw new Error(`缩略图生成失败：${error instanceof Error ? error.message : String(error)}`);
       throw new Error('图片无法完整解码或校验超时，请检查文件是否损坏。');
     } finally { pendingImages.delete(token); }

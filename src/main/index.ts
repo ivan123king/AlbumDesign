@@ -18,6 +18,7 @@ import { runRecentAlbumSmoke } from './recent-album-smoke';
 import { runAssetDeleteSmoke } from './asset-delete-smoke';
 import { AppDialogs } from './app-dialogs';
 import { runPdfSmoke } from './pdf-smoke';
+import { runCropSmoke } from './crop-smoke';
 
 declareImageProtocol();
 
@@ -26,8 +27,9 @@ const layerSmoke = !app.isPackaged && process.argv.includes('--layer-smoke');
 const assetSmoke = !app.isPackaged && process.argv.includes('--asset-preview-smoke');
 const recentSmoke = !app.isPackaged && process.argv.includes('--recent-smoke');
 const assetDeleteSmoke = !app.isPackaged && process.argv.includes('--asset-delete-smoke');
+const cropSmoke = !app.isPackaged && process.argv.includes('--crop-smoke');
 const pdfSmoke = !app.isPackaged && process.argv.includes('--pdf-smoke');
-const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke || assetSmoke || recentSmoke || assetDeleteSmoke || pdfSmoke);
+const smokeMode = !app.isPackaged && (process.argv.includes('--framework-smoke') || textSmoke || layerSmoke || assetSmoke || recentSmoke || assetDeleteSmoke || pdfSmoke || cropSmoke);
 const projectRoot = join(__dirname, '../..');
 const rendererFile = join(__dirname, '../renderer/index.html');
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined;
@@ -180,8 +182,8 @@ async function bootstrap(): Promise<void> {
   albums.register();
   installMenu(albums, dialogs);
   mainWindow = createWindow(smokeMode);
-  mainWindow.webContents.on('did-start-loading', () => albums.cancelPdf());
-  mainWindow.webContents.on('render-process-gone', () => albums.cancelPdf());
+  mainWindow.webContents.on('did-start-loading', () => { albums.cancelPdf(); void albums.releaseCrop(); });
+  mainWindow.webContents.on('render-process-gone', () => { albums.cancelPdf(); void albums.releaseCrop(); });
   dialogs.register(mainWindow);
   // 在渲染页面载入前占用操作锁，广播丢失也可通过初始状态查询获取结果。
   const initialization = albums.initialize(!smokeMode || recentSmoke);
@@ -197,6 +199,10 @@ async function bootstrap(): Promise<void> {
   await loadRenderer(mainWindow);
   await initialization;
   if (smokeMode) {
+    if (cropSmoke) {
+      await runCropSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
+      app.quit(); return;
+    }
     if (pdfSmoke) {
       await runPdfSmoke(mainWindow, join(projectRoot, '.cache', 'verification'), albums);
       app.quit(); return;

@@ -1,16 +1,33 @@
 /** 文件用途：管理正式页面、单页编辑草稿、独立图片副本及可回滚的普通文件操作。 */
-import { copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { join, extname, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import type { AlbumPageReference } from '../shared/album';
 import type { CanvasDocument, CanvasSnapshot, ImageGeometry, ImageObject, TextDraft, TextObject } from '../shared/canvas';
-import { fitImage, normalizeAngle, objectNameError, textBaseSize } from '../shared/canvas';
+import { fitImage, normalizeAngle, objectNameError, rotateVector, textBaseSize } from '../shared/canvas';
+import type { CropBounds } from '../shared/crop';
 import { getTextFonts, textFontFamilies } from './text-fonts';
 import type { Orientation } from '../shared/framework';
 import { AlbumStore, publishExclusive } from './album-store';
 import { replaceJson } from './json-storage';
 
 export type InspectImage = (path: string, format: 'jpeg' | 'png') => Promise<{ width: number; height: number }>;
+
+/** 流式核对本次生成文件，崩溃恢复时不删除外部程序写入的同名图片。 */
+async function cropFileHash(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+/** 文件身份只用于裁剪旧图清理，发现外部更新则保留文件并报告。 */
+async function cropFileStamp(path: string): Promise<string> {
+  const info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error('裁剪清理目标不是普通图片。');
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+}
 
 /** 方向仅有两种；来自 IPC 的值必须运行时检查。 */
 export function assertOrientation(value: unknown): asserts value is Orientation {
@@ -99,6 +116,7 @@ async function assertDeletableDirectory(path: string): Promise<void> {
 
 /** 只缓存当前页；排版与叠层草稿需手动保存，结构性文件操作在无草稿时提交。 */
 export class PageStore {
+  private cropStages = new Map<string, { directory: string; file: string; fileName: string; previousName: string }>();
   private active: { albumId: string; pageId: string; document: CanvasDocument; saved: CanvasDocument; text: string; warnings: string[] } | null = null;
 
   constructor(private readonly albums: AlbumStore, private readonly inspect: InspectImage) {}
@@ -112,8 +130,44 @@ export class PageStore {
 
   get dirty(): boolean { return !!this.active && JSON.stringify(this.active.document) !== JSON.stringify(this.active.saved); }
 
-  /** 放弃未提交的名称、文字、几何、叠层与方向，不删除已完成的图片导入或页面操作。 */
-  discard(): void { if (this.active) this.active.document = structuredClone(this.active.saved); }
+  /** 放弃名称、文字、几何、叠层、方向及暂存裁剪；已提交的图片导入或页面操作保留。 */
+  async discard(): Promise<void> {
+    if (this.active) this.active.document = structuredClone(this.active.saved);
+    const stages = [...this.cropStages.values()];
+    this.cropStages.clear();
+    for (const stage of stages) {
+      try { await this.cleanCropStage(stage.directory, this.active!.saved); }
+      catch (error) { this.active?.warnings.push(`已放弃修改，裁剪临时文件待下次打开清理：${String(error)}`); }
+    }
+  }
+
+  /** 仅清理带有效事务记录的本软件裁剪目录；JSON 已提交则删旧图，否则删未提交的新图。 */
+  private async cleanCropStage(directory: string, document: CanvasDocument): Promise<void> {
+    await plainDirectory(directory);
+    const marker = join(directory, 'transaction.json');
+    const info = await lstat(marker);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > 2048) throw new Error('裁剪事务记录无效。');
+    const record = JSON.parse(await readFile(marker, 'utf8')) as { fileName: string; previousName: string; resultHash: string; previousStamp: string };
+    if (![record.fileName, record.previousName].every(name => typeof name === 'string' && /^\d{3,}\.(jpg|jpeg|png)$/iu.test(name))
+      || typeof record.resultHash !== 'string' || !/^[a-f0-9]{64}$/u.test(record.resultHash) || typeof record.previousStamp !== 'string') throw new Error('裁剪事务记录无效。');
+    if ((await readdir(directory)).some(name => !['result.png', 'transaction.json'].includes(name))) throw new Error('裁剪临时目录含未知文件，未清理。');
+    const used = new Set(document.objects.filter(item => item.kind === 'image').map(item => item.fileName));
+    const page = join(directory, '..'); await plainDirectory(page);
+    for (const name of [record.fileName, record.previousName]) {
+      if (used.has(name)) continue;
+      const file = join(page, name);
+      try {
+        const stamp = await cropFileStamp(file);
+        if (name === record.fileName ? await cropFileHash(file) !== record.resultHash : stamp !== record.previousStamp) throw new Error(`图片 ${name} 已被外部修改，未自动删除。`);
+        await unlink(file);
+      }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
+    // 不递归删除未知内容；只移除本事务约定的两个文件，异常条目保留并报告。
+    await unlink(join(directory, 'result.png')).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    const { rmdir } = await import('node:fs/promises');
+    await unlink(marker); await rmdir(directory);
+  }
 
   /** 根据清单中的稳定 ID 查页，拒绝界面直接提供目录编号或磁盘路径。 */
   private async pageDirectory(albumId: string, pageId: string): Promise<{ path: string; reference: AlbumPageReference }> {
@@ -143,6 +197,12 @@ export class PageStore {
     try { value = JSON.parse(text); } catch { throw new Error('canvas.json 已损坏，未覆盖原有数据。'); }
     const document = parseCanvas(value);
     const warnings: string[] = [];
+    for (const entry of await readdir(path, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^\.crop-[a-zA-Z0-9]+$/u.test(entry.name)) {
+        try { await this.cleanCropStage(join(path, entry.name), document); }
+        catch (error) { warnings.push(`裁剪临时文件清理失败：${String(error)}`); }
+      }
+    }
     const fonts = document.objects.some(object => object.kind === 'text') ? await getTextFonts() : [];
     for (const object of document.objects) {
       if (object.kind === 'text') {
@@ -228,9 +288,63 @@ export class PageStore {
     const active = this.active;
     const { path } = await this.pageDirectory(active.albumId, active.pageId);
     parseCanvas(active.document);
-    const text = await replaceJson(join(path, 'canvas.json'), active.document, active.text);
+    const published: string[] = [];
+    let text: string;
+    try {
+      for (const stage of this.cropStages.values()) {
+        const destination = join(path, stage.fileName);
+        await publishExclusive(stage.file, destination); published.push(destination);
+      }
+      text = await replaceJson(join(path, 'canvas.json'), active.document, active.text);
+    } catch (error) {
+      for (const file of published) await unlink(file).catch(() => undefined);
+      throw error;
+    }
     active.text = text;
     active.saved = structuredClone(active.document);
+    for (const stage of this.cropStages.values()) {
+      try { await this.cleanCropStage(stage.directory, active.saved); }
+      catch (error) { active.warnings.push(`图片已保存，旧图片清理失败，下次打开重试：${String(error)}`); }
+    }
+    this.cropStages.clear();
+  }
+
+  /** 裁剪先进入草稿；预留编号独立持久化，保存后才删旧图，放弃可恢复原图片。 */
+  async stageCrop(albumId: string, pageId: string, objectId: string, png: Buffer, bounds: CropBounds, width: number, height: number): Promise<void> {
+    const active = this.current(albumId, pageId);
+    const object = active.document.objects.find(item => item.id === objectId);
+    if (!object || object.kind !== 'image') throw new Error('裁剪图片不存在。');
+    const { path } = await this.pageDirectory(albumId, pageId);
+    const reserved = structuredClone(active.saved);
+    const number = Math.max(reserved.nextImageNumber, active.document.nextImageNumber);
+    reserved.nextImageNumber = number + 1;
+    active.text = await replaceJson(join(path, 'canvas.json'), reserved, active.text);
+    active.saved = reserved; active.document.nextImageNumber = number + 1;
+    const fileName = `${String(number).padStart(3, '0')}.png`;
+    const previousName = active.saved.objects.find(item => item.id === objectId && item.kind === 'image')!;
+    const directory = await mkdtemp(join(path, '.crop-'));
+    const stage = { directory, file: join(directory, 'result.png'), fileName,
+      previousName: (previousName as ImageObject).fileName };
+    try {
+      const previousStamp = await cropFileStamp(join(path, stage.previousName));
+      await writeFile(stage.file, png, { flag: 'wx' });
+      const resultHash = await cropFileHash(stage.file);
+      await writeFile(join(directory, 'transaction.json'), JSON.stringify({ fileName, previousName: stage.previousName, resultHash, previousStamp }), { flag: 'wx' });
+      const former = this.cropStages.get(objectId);
+      if (former) await this.cleanCropStage(former.directory, active.saved);
+      const shift = rotateVector(((bounds.x + bounds.width / 2) / width - .5) * object.widthMm,
+        ((bounds.y + bounds.height / 2) / height - .5) * object.heightMm, object.rotation);
+      const widthMm = object.widthMm * bounds.width / width, heightMm = object.heightMm * bounds.height / height;
+      object.xMm += object.widthMm / 2 + shift.x - widthMm / 2;
+      object.yMm += object.heightMm / 2 + shift.y - heightMm / 2;
+      object.widthMm = widthMm; object.heightMm = heightMm; object.fileName = fileName;
+      this.cropStages.set(objectId, stage);
+    } catch (error) {
+      await unlink(stage.file).catch(() => undefined);
+      await unlink(join(directory, 'transaction.json')).catch(() => undefined);
+      const { rmdir } = await import('node:fs/promises'); await rmdir(directory).catch(() => undefined);
+      throw error;
+    }
   }
 
   /** 内部结构变更提交，失败恢复原草稿，计数预留等已经成功的提交保留。 */
@@ -403,7 +517,8 @@ export class PageStore {
     const object = document.objects.find(item => item.id === objectId);
     if (!object || object.kind !== 'image') throw new Error('图片对象不存在。');
     const { path } = await this.pageDirectory(albumId, pageId);
-    const file = join(path, object.fileName);
+    const staged = !loaded && this.cropStages.get(objectId);
+    const file = staged ? staged.file : join(path, object.fileName);
     const info = await lstat(file);
     if (!info.isFile() || info.isSymbolicLink()) throw new Error('页面图片不能是目录或链接。');
     return file;

@@ -1,6 +1,6 @@
 /** 文件用途：异步管理画册清单、素材分组、原图复制与回收站删除，限制路径在当前画册内。 */
 import { createReadStream } from 'node:fs';
-import { copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, unlink } from 'node:fs/promises';
+import { copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
@@ -246,6 +246,30 @@ export class AlbumStore {
     const stat = await lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('素材文件不能是目录或链接。');
     return file;
+  }
+
+  /** 裁剪素材发布真实 PNG；PNG 同目录原子替换，JPEG 先发布再删旧图，失败保留原素材。 */
+  async replaceCroppedAsset(id: string, path: string, png: Buffer): Promise<string> {
+    const source = await this.assetFile(id, path);
+    const directory = dirname(source), extension = extname(source), stem = basename(source, extension);
+    const temporary = join(directory, '.crop-' + randomUUID() + '.tmp');
+    try {
+      await writeFile(temporary, png, { flag: 'wx' });
+      await this.assetFile(id, path);
+      if (extension.toLowerCase() === '.png') {
+        await rename(temporary, source);
+        return path;
+      }
+      let destination = '';
+      for (let suffix = 0; ; suffix++) {
+        destination = join(directory, stem + (suffix ? ' (' + suffix + ')' : '') + '.png');
+        try { await publishExclusive(temporary, destination); break; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+      }
+      try { await unlink(source); }
+      catch (error) { await unlink(destination); throw error; }
+      return [dirname(path) === '.' ? '' : dirname(path), basename(destination)].filter(Boolean).join('/');
+    } finally { await unlink(temporary).catch(() => undefined); }
   }
 
   /** 只创建固定的可重建素材缓存目录；逐层拒绝链接，兼容未创建缓存的旧画册。 */

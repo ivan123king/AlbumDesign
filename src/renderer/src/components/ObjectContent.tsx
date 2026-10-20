@@ -16,6 +16,6 @@ export function ObjectContent({ object, albumId, pageId, editing = false, onImag
   object: CanvasObject; albumId: string; pageId: string; editing?: boolean; onImageError?: () => void;
 }): React.JSX.Element {
   return object.kind === 'image'
-    ? <img src={`album-page://image/${albumId}/${pageId}/${object.id}`} alt={object.sourceName} draggable={false} onError={onImageError} />
+    ? <img key={object.fileName} src={`album-page://image/${albumId}/${pageId}/${object.id}?v=${object.fileName}`} alt={object.sourceName} draggable={false} onError={onImageError} />
     : <TextContent object={object} showOverflow={editing} />;
 }

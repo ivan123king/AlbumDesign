@@ -6,6 +6,7 @@ import type { AlbumState, AssetEntry, ImportReport } from '../../../shared/album
 import { assetDragType } from '../../../shared/canvas';
 import { AssetPreview } from './AssetPreview';
 import { AssetGallery } from './AssetGallery';
+import { ImageCropDialog } from './ImageCropDialog';
 
 interface AssetsPanelProps {
   state: AlbumState;
@@ -55,6 +56,7 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
   const [preview, setPreview] = useState<{ albumId: string; path: string } | null>(null);
   const [view, setView] = useState<'directory' | 'gallery'>('directory');
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [cropPath, setCropPath] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ albumId: string; path: string; kind: AssetEntry['kind']; x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const scrollRoot = useRef<HTMLDivElement>(null);
@@ -89,6 +91,7 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
     setCreatingGroup(false);
     setReport(null);
     setPreview(null);
+    setCropPath(null);
     setView('directory');
   }, [album?.id]);
 
@@ -269,11 +272,18 @@ export function AssetsPanel({ state, onMessage }: AssetsPanelProps): React.JSX.E
     <div className="panel-footer">{album ? '素材已直接保存到画册目录' : '素材将保存在画册的 assets 目录'}</div>
     {menu && createPortal(<div className="image-context-menu" ref={menuRef} role="menu" aria-label="素材操作" data-asset-context-menu
       style={{ left: menu.x, top: menu.y }} onContextMenu={event => event.preventDefault()}>
+      {menu.kind === 'image' && <button type="button" role="menuitem" disabled={locked} data-crop-asset onClick={() => {
+        setCropPath(menu.path); setMenu(null);
+      }}>裁剪</button>}
       <button type="button" role="menuitem" disabled={locked} data-delete-asset onClick={() => { void deleteEntry(); }}>
         {menu.kind === 'directory' ? '删除分组' : '删除素材'}</button>
     </div>, document.body)}
     {creatingGroup && <GroupDialog busy={locked} target={selectedPath} onCreate={createGroup} onClose={() => setCreatingGroup(false)} />}
     {preview && preview.albumId === album?.id && <AssetPreview key={`${preview.albumId}:${preview.path}`}
       albumId={preview.albumId} path={preview.path} onClose={() => setPreview(null)} />}
+    {cropPath && album && <ImageCropDialog target={{ kind: 'asset', albumId: album.id, path: cropPath }} name={cropPath}
+      onClose={() => setCropPath(null)} onApplied={() => {
+        setCropPath(null); setRefreshVersion(value => value + 1); onMessage('素材已裁剪并替换，已有画布中的图片不变。');
+      }} />}
   </aside>;
 }

@@ -14,12 +14,15 @@ import type { AppDialogs } from './app-dialogs';
 import type { AlbumResult, AlbumSnapshot, AlbumState, AssetEntry, ImportReport } from '../shared/album';
 import { PdfExport } from './pdf-export';
 import { pdfFileName } from '../shared/pdf';
+import { CropImages } from './crop-images';
+import type { CropSettings, CropTarget } from '../shared/crop';
 
 /** 主菜单与 preload 共用控制器，避免并行导入和切换画册造成错写。 */
 export class AlbumController {
   private store = new AlbumStore();
   private pages = this.makePages(this.store);
   private assetImages = new AssetImages(() => this.store);
+  private cropImages = new CropImages();
   private state: AlbumState = { revision: 0, album: null, busy: false, progress: null, canvas: null };
   private initialized = false;
   private pdf: PdfExport | null = null;
@@ -40,7 +43,7 @@ export class AlbumController {
 
   /** 业务忙碌或自定义模态打开时禁用其他菜单入口，保存仍要求当前画布有草稿。 */
   updateMenu(): void {
-    const locked = this.state.busy || this.dialogs.isOpen;
+    const locked = this.state.busy || this.dialogs.isOpen || this.cropImages.active;
     for (const id of ['create-album', 'open-album', 'about-app']) {
       const item = Menu.getApplicationMenu()?.getMenuItemById(id);
       if (item) item.enabled = !locked;
@@ -67,13 +70,13 @@ export class AlbumController {
     const answer = await dialog.showMessageBox(this.getWindow(), { type: 'question', title: '画布有未保存修改',
       message: '是否保存当前画布的修改（对象名称、图片、文字、图层与方向）？', buttons: ['保存', '放弃修改', '取消'], defaultId: 0, cancelId: 2 });
     if (answer.response === 2) return false;
-    if (answer.response === 0) await this.pages.save(); else this.pages.discard();
+    if (answer.response === 0) await this.pages.save(); else await this.pages.discard();
     return true;
   }
 
   /** 忙碌时直接拒绝；取消与失败分别返回，启动及软件设置错误用非阻塞提示反馈。 */
-  private async run<T>(operation: () => Promise<T | undefined>, quietFailure?: string): Promise<AlbumResult<T>> {
-    if (this.state.busy || this.dialogs.isOpen) return { status: 'error', message: '请先完成当前操作或关闭弹窗。' };
+  private async run<T>(operation: () => Promise<T | undefined>, quietFailure?: string, allowCrop = false): Promise<AlbumResult<T>> {
+    if (this.state.busy || this.dialogs.isOpen || (!allowCrop && this.cropImages.active)) return { status: 'error', message: '请先完成当前操作或关闭弹窗。' };
     this.publish({ busy: true, progress: null });
     try {
       const value = await operation();
@@ -163,6 +166,31 @@ export class AlbumController {
 
   /** 注册有限业务接口，所有调用复用现有主窗口来源校验。 */
   register(): void {
+    ipcMain.handle('crop:begin', (event, target: CropTarget) => {
+      this.assertSender(event);
+      return this.run(async () => {
+        if (!target) throw new Error('裁剪目标无效。');
+        this.assertArguments(target.albumId, '');
+        return this.cropImages.begin(target, this.store, this.pages);
+      });
+    });
+    ipcMain.handle('crop:apply', (event, token: string, settings: CropSettings) => {
+      this.assertSender(event);
+      return this.run(async () => {
+        const value = await this.cropImages.apply(token, settings, this.store, this.pages);
+        if (value !== null && this.state.album) {
+          this.assetImages.reset();
+          await this.refresh(this.state.album.id).catch(error => this.publish({ notice: `素材已裁剪，列表刷新失败，请点击刷新：${describeFileError(error)}` }));
+        }
+        return value;
+      }, undefined, true);
+    });
+    ipcMain.handle('crop:release', async (event, token: string) => {
+      this.assertSender(event);
+      if (typeof token !== 'string') return;
+      await this.cropImages.release(token).catch(error => this.publish({ notice: `裁剪已关闭，源图临时副本清理失败：${describeFileError(error)}` }));
+      this.updateMenu();
+    });
     this.assetImages.install();
     ipcMain.handle('asset:image', (event, id: string, path: string, kind: 'preview' | 'thumbnail', requestId: string, retry?: boolean) => {
       this.assertSender(event);
@@ -372,11 +400,17 @@ export class AlbumController {
 
   /** 主窗口 close 事件先阻止退出，再确认草稿；业务进行中拒绝关闭。 */
   async canClose(): Promise<boolean> {
-    if (this.state.busy) return false;
+    if (this.state.busy || this.cropImages.active) return false;
     const result = await this.run(async () => await this.guardDirty());
     return result.status === 'success' && result.value;
   }
 
   /** 主窗口关闭后释放浏览租约和后台图片任务。 */
-  dispose(): void { this.cancelPdf(); this.assetImages.reset(); }
+  dispose(): void { this.cancelPdf(); this.assetImages.reset(); void this.releaseCrop(); }
+
+  /** 主窗口重载时撤销孤立裁剪弹框，允许恢复正常菜单操作。 */
+  async releaseCrop(): Promise<void> {
+    await this.cropImages.release().catch(error => this.publish({ notice: `裁剪临时副本清理失败：${describeFileError(error)}` }));
+    this.updateMenu();
+  }
 }

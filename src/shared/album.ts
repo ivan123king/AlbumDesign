@@ -2,6 +2,7 @@
 import type { Orientation } from './framework';
 import type { CanvasSnapshot, ImageGeometry, TextDraft, TextFont } from './canvas';
 import type { PdfPrintPage, PdfProgress } from './pdf';
+import type { CropSettings, CropSource, CropTarget } from './crop';
 
 /** 页面目录编号与数组中的页序分开保存，后续页面管理沿用此约定。 */
 export interface AlbumPageReference {
@@ -69,6 +70,10 @@ export type AlbumResult<T> =
  * 操作分别返回 success、canceled 或带中文原因的 error；连接中断仍可能拒绝 Promise。
  */
 export interface AlbumApi {
+  /** 打开裁剪只读快照；确认按原始像素替换指定素材或当前页草稿，失败保留源图。 */
+  beginImageCrop(target: CropTarget): Promise<AlbumResult<CropSource>>;
+  applyImageCrop(token: string, settings: CropSettings): Promise<AlbumResult<string | null>>;
+  releaseImageCrop(token: string): Promise<void>;
   /** 导出位置由原生对话框授权，失败返回原因；取消保留已有文件。 */
   exportAlbumPdf(): Promise<AlbumResult<string>>;
   cancelPdfExport(): Promise<void>;

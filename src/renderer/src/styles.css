@@ -1,5 +1,29 @@
 /* 文件用途：定义三栏桌面框架、毫米页面排版及独立打印样式。 */
 :root { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #30332f; background: #f5f4f1; font-synthesis: none; text-rendering: optimizeLegibility; }
+/* 裁剪只在按钮触发时生成预览；操作区使用原图像素 SVG 坐标与八点控制框。 */
+.group-dialog.crop-dialog { width: min(1000px, calc(100vw - 40px)); max-width: none; max-height: calc(100vh - 32px); padding: 22px; overflow: auto; }
+.crop-heading { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+.crop-heading h2 { margin: 0; white-space: nowrap; }
+.crop-heading span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #77816f; font-size: 12px; }
+.crop-stage { position: relative; display: flex; align-items: center; justify-content: center; height: clamp(210px, 49vh, 580px); overflow: hidden; background: repeating-conic-gradient(#e3e5df 0% 25%, #fff 0% 50%) 0 0 / 20px 20px; border: 1px solid #cbd1c5; border-radius: 6px; }
+.crop-source-loader { display: none; }
+.crop-stage svg { width: 100%; height: 100%; touch-action: none; user-select: none; }
+.crop-result { width: 100%; height: 100%; object-fit: contain; }
+.crop-frame { fill: transparent; stroke: #fff; stroke-width: 1px; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; cursor: move; }
+.crop-outline { fill: none; stroke: #287a43; stroke-width: 2px; pointer-events: none; }
+.crop-line { stroke: #287a43; stroke-width: 2px; }
+.crop-control { fill: white; stroke: #287a43; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.crop-nw, .crop-se { cursor: nwse-resize; } .crop-ne, .crop-sw { cursor: nesw-resize; }
+.crop-n, .crop-s { cursor: ns-resize; } .crop-e, .crop-w { cursor: ew-resize; } .crop-rotate { cursor: grab; fill: #d7edca; }
+.crop-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; padding-top: 14px; }
+.crop-dialog .crop-tools label { display: flex; flex-direction: column; gap: 5px; margin: 0; font-size: 12px; }
+.crop-dialog .crop-tools input[type=number] { width: 100px; }
+.crop-dialog .crop-tools select { min-width: 140px; }
+.crop-dialog .crop-tools .crop-inverse { flex-direction: row; align-items: center; align-self: center; }
+.crop-dialog .crop-inverse input { width: 16px; margin: 0; }
+.crop-dialog .crop-hint { margin: 8px 0; font-size: 11px; line-height: 1.6; }
+.crop-error { color: #a33f2c; font-size: 12px; }
+.crop-status { position: absolute; inset: 0; display: grid; place-content: center; background: #ffffffb8; font-size: 13px; }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button { font: inherit; cursor: pointer; color: inherit; }

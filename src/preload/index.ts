@@ -4,6 +4,9 @@ import type { AppDialogState, DesktopApi } from '../shared/framework';
 import type { AlbumState } from '../shared/album';
 
 const desktopApi: DesktopApi = {
+  beginImageCrop: target => ipcRenderer.invoke('crop:begin', target),
+  applyImageCrop: (token, settings) => ipcRenderer.invoke('crop:apply', token, settings),
+  releaseImageCrop: token => ipcRenderer.invoke('crop:release', token),
   getAppInfo: () => ipcRenderer.invoke('framework:app-info'),
   exportAlbumPdf: () => ipcRenderer.invoke('album:export-pdf'),
   cancelPdfExport: () => ipcRenderer.invoke('album:cancel-pdf'),

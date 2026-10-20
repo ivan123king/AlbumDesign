@@ -6,6 +6,7 @@ import type { Orientation } from '../../../shared/framework';
 import type { CanvasObject, ImageGeometry, TextObject } from '../../../shared/canvas';
 import { defaultObjectLabel, objectLabel, objectNameError } from '../../../shared/canvas';
 import { ImageSizeDialog } from './ImageSizeDialog';
+import { ImageCropDialog } from './ImageCropDialog';
 
 /** 新建与改名共用表单，名称仅用于显示，不作为目录路径。 */
 function PageDialog({ mode, name: initial, busy, onSubmit, onClose }: {
@@ -89,6 +90,7 @@ export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, on
   const [menu, setMenu] = useState<{ object: CanvasObject; x: number; y: number } | null>(null);
   const [pageMenu, setPageMenu] = useState<{ page: AlbumPageReference; x: number; y: number } | null>(null);
   const [sizeObject, setSizeObject] = useState<CanvasObject | null>(null);
+  const [cropObject, setCropObject] = useState<CanvasObject | null>(null);
   const [nameDialog, setNameDialog] = useState<{ albumId: string; pageId: string; object: CanvasObject } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const layerDrag = useRef<{ id: string; albumId: string; pageId: string } | null>(null);
@@ -115,7 +117,7 @@ export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, on
     if (activeMenu && element) element.style.top = `${Math.max(8, Math.min(activeMenu.y, window.innerHeight - element.getBoundingClientRect().height - 8))}px`;
   }, [menu, pageMenu]);
   useEffect(() => { setDialog(null); }, [album?.id]);
-  useEffect(() => { setMenu(null); setPageMenu(null); setSizeObject(null); setNameDialog(null); }, [album?.id, canvas?.pageId]);
+  useEffect(() => { setMenu(null); setPageMenu(null); setSizeObject(null); setNameDialog(null); setCropObject(null); }, [album?.id, canvas?.pageId]);
   useEffect(() => {
     if (!menu && !pageMenu) return;
     menuRef.current?.querySelector('button')?.focus({ preventScroll: true });
@@ -219,6 +221,7 @@ export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, on
         setMenu(null);
       }}>改名</button>
       <button type="button" role="menuitem" disabled={busy} onClick={() => { setSizeObject(menu.object); setMenu(null); }}>调整{menu.object.kind === 'image' ? '图片' : '文字'}大小</button>
+      {menu.object.kind === 'image' && <button type="button" role="menuitem" disabled={busy} data-crop-object onClick={() => { setCropObject(menu.object); setMenu(null); }}>裁剪</button>}
       {menu.object.kind === 'text' && <button type="button" role="menuitem" disabled={busy} onClick={() => { if (menu.object.kind === 'text') onEditText(menu.object); setMenu(null); }}>编辑文字</button>}
       <button type="button" role="menuitem" disabled={busy} onClick={() => { void onRotate(menu.object.id, menu.object.rotation + 90); setMenu(null); }}>顺时针旋转 90°</button>
       <button type="button" role="menuitem" disabled={busy} onClick={() => { void onRotate(menu.object.id, menu.object.rotation - 90); setMenu(null); }}>逆时针旋转 90°</button>
@@ -233,6 +236,9 @@ export function PagesPanel({ state, selectedId, onSelectPage, onSelectObject, on
     </div>, document.body)}
     {sizeObject && canvas && <ImageSizeDialog object={sizeObject} busy={busy}
       onClose={() => setSizeObject(null)} onSubmit={geometry => onResize(sizeObject.id, geometry)} />}
+    {cropObject && album && canvas && <ImageCropDialog name={objectLabel(cropObject)}
+      target={{ kind: 'page', albumId: album.id, pageId: canvas.pageId, objectId: cropObject.id }}
+      onClose={() => setCropObject(null)} onApplied={() => setCropObject(null)} />}
     {nameDialog && nameDialog.albumId === album?.id && nameDialog.pageId === canvas?.pageId
       && canvas.document.objects.some(object => object.id === nameDialog.object.id)
       && <ObjectNameDialog object={nameDialog.object} busy={busy} onClose={() => setNameDialog(null)}
