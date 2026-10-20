@@ -1,5 +1,6 @@
 /** 文件用途：仅使用临时画册验收真实 PDF、命名、页序、取消、异常和旧文件保护。 */
 import assert from 'node:assert/strict';
+import { answerUnsaved } from './dialog-smoke-helpers';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -90,7 +91,9 @@ export async function runPdfSmoke(window: BrowserWindow, output: string, control
   }) as typeof dialog.showMessageBox;
   /** 通过 preload 调用正式接口，不新增生产验收权限。 */
   const state = (): Promise<AlbumState> => window.webContents.executeJavaScript('window.desktop.getAlbumState()');
-  const exportPdf = (): Promise<AlbumResult<string>> => window.webContents.executeJavaScript('window.desktop.exportAlbumPdf()');
+  const exportPdf = async (): Promise<AlbumResult<string>> => (await state()).canvas?.dirty
+    ? answerUnsaved(window, () => window.webContents.executeJavaScript('window.desktop.exportAlbumPdf()'), answer === 0 ? 'save' : 'cancel')
+    : window.webContents.executeJavaScript('window.desktop.exportAlbumPdf()');
   /** 每个失败或取消用例后均检查任务临时目录已清理。 */
   const clean = async (): Promise<void> => { assert(!(await readdir(temporary)).some(name => name.startsWith('.album-pdf-'))); };
   let peakWorkingSetKB = 0;

@@ -9,35 +9,6 @@ import type { ResizeHandle } from '../../../shared/canvas';
 const initialCrop: CropSettings = { shape: 'rectangle', cx: .5, cy: .5, width: .8, height: .8, angle: 0, inverse: false };
 type Gesture = { kind: ResizeHandle | 'move' | 'rotate'; pointer: number; x: number; y: number; start: CropSettings };
 
-/** 保证旋转控制框完整留在图片内；统一收缩并约束中心，避免出现原图之外的空白。 */
-function constrainCrop(crop: CropSettings, width: number, height: number): CropSettings {
-  const angle = crop.angle * Math.PI / 180, c = Math.abs(Math.cos(angle)), s = Math.abs(Math.sin(angle));
-  let w = crop.width * width, h = crop.height * height;
-  const scale = Math.min(1, width / (c * w + s * h), height / (s * w + c * h));
-  w *= scale; h *= scale;
-  const halfW = (c * w + s * h) / 2 / width, halfH = (s * w + c * h) / 2 / height;
-  return { ...crop, width: w / width, height: h / height,
-    cx: Math.max(halfW, Math.min(1 - halfW, crop.cx)), cy: Math.max(halfH, Math.min(1 - halfH, crop.cy)) };
-}
-
-/** 缩放碰到图片边界时沿本次手势截断，保留固定对角/对边及单轴规则，不联动改变另一边。 */
-function limitResize(start: CropSettings, next: CropSettings, width: number, height: number): CropSettings {
-  const angle = start.angle * Math.PI / 180, c = Math.abs(Math.cos(angle)), s = Math.abs(Math.sin(angle));
-  const interpolate = (factor: number): CropSettings => ({ ...start,
-    cx: start.cx + (next.cx - start.cx) * factor, cy: start.cy + (next.cy - start.cy) * factor,
-    width: start.width + (next.width - start.width) * factor, height: start.height + (next.height - start.height) * factor });
-  const fits = (candidate: CropSettings): boolean => {
-    const halfW = (c * candidate.width * width + s * candidate.height * height) / 2 / width;
-    const halfH = (s * candidate.width * width + c * candidate.height * height) / 2 / height;
-    return candidate.width <= 1 && candidate.height <= 1 && candidate.cx >= halfW - 1e-10 && candidate.cx <= 1 - halfW + 1e-10
-      && candidate.cy >= halfH - 1e-10 && candidate.cy <= 1 - halfH + 1e-10;
-  };
-  if (fits(next)) return next;
-  let low = 0, high = 1;
-  for (let i = 0; i < 30; i++) { const middle = (low + high) / 2; if (fits(interpolate(middle))) low = middle; else high = middle; }
-  return interpolate(low);
-}
-
 /** 原生模态焦点限制背景操作；关闭释放只读源图租约与本次预览，不改变任何文件。 */
 export function ImageCropDialog({ target, name, onClose, onApplied }: {
   target: CropTarget; name: string; onClose: () => void; onApplied: (path: string | null) => void;
@@ -126,7 +97,8 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
       const shift = rotateVector(sx * (nextW - w) / 2, sy * (nextH - h) / 2, start.angle);
       next = { ...next, cx: start.cx + shift.x / width, cy: start.cy + shift.y / height, width: nextW / width, height: nextH / height };
     }
-    setCrop(current.kind === 'move' || current.kind === 'rotate' ? constrainCrop(next, width, height) : limitResize(start, next, width, height)); setError('');
+    // 裁剪框可以越出原图；每种手势只修改对应属性，输出时再取原图交集。
+    setCrop(next); setError('');
   }
   /** 松手保留当前框，系统取消则恢复手势起点，统一释放指针捕获。 */
   function end(event: PointerEvent<SVGSVGElement>, canceled = false): void {
@@ -166,7 +138,7 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
   /** 切换形状以方形框初始化圆与心形；之后边中点允许自由拉伸，角点保持当前比例。 */
   function changeShape(shape: CropShape): void {
     const side = Math.min(width, height) * .7;
-    setCrop(constrainCrop({ ...crop, shape, ...(shape === 'rectangle' ? {} : { width: side / width, height: side / height }) }, width, height));
+    setCrop({ ...crop, shape, ...(shape === 'rectangle' ? {} : { width: side / width, height: side / height }) });
   }
   return <dialog ref={dialog} className="group-dialog crop-dialog" aria-labelledby="crop-title" data-image-crop
     onCancel={event => {
@@ -195,15 +167,15 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
       {preview && <img className="crop-result" src={preview} alt="裁剪结果，棋盘格表示透明区域" />}
       {(pending || opening || (!loaded && !error)) && <div className="crop-status" role="status">{opening || !loaded ? '正在加载图片…' : '正在处理图片…'}</div>}
     </div>
-    <div className="crop-tools">
-      <label>裁剪形状<select aria-label="裁剪形状" value={crop.shape} disabled={locked || !!preview} onChange={event => changeShape(event.target.value as CropShape)}>
+    <div className="crop-tools" role="group" aria-label="裁剪设置">
+      <label className="crop-field"><span>裁剪形状</span><select aria-label="裁剪形状" value={crop.shape} disabled={locked || !!preview} onChange={event => changeShape(event.target.value as CropShape)}>
         <option value="rectangle">矩形</option><option value="ellipse">圆形／椭圆</option><option value="heart">心形</option></select></label>
-      <label>旋转角度<input aria-label="裁剪旋转角度" type="number" value={Number(crop.angle.toFixed(1))} step="1" disabled={locked || !!preview}
-        onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setCrop(constrainCrop({ ...crop, angle: ((value % 360) + 360) % 360 }, width, height)); }} /></label>
-      <label className="crop-inverse"><input type="checkbox" checked={crop.inverse} disabled={locked || !!preview} onChange={event => setCrop({ ...crop, inverse: event.target.checked })} />反向裁剪（保留形状外部）</label>
-      <button type="button" disabled={locked || !!preview} onClick={() => { setCrop(initialCrop); setError(''); }}>重置</button>
+      <label className="crop-field"><span>旋转角度</span><span className="crop-angle-input"><input aria-label="裁剪旋转角度" type="number" value={Number(crop.angle.toFixed(1))} step="1" disabled={locked || !!preview}
+        onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setCrop({ ...crop, angle: ((value % 360) + 360) % 360 }); }} /><span aria-hidden="true">°</span></span></label>
+      <label className="crop-inverse" title="勾选后保留形状外部，移除形状内部"><input type="checkbox" checked={crop.inverse} disabled={locked || !!preview} onChange={event => setCrop({ ...crop, inverse: event.target.checked })} /><span>反向裁剪</span></label>
+      <button className="crop-reset" type="button" disabled={locked || !!preview} onClick={() => { setCrop(initialCrop); setError(''); }}><span aria-hidden="true">↺</span>重置</button>
     </div>
-    <p className="crop-hint">四角等比例缩放，四边只改长宽；拖动框内移动，上方圆点旋转。点击预览查看透明裁剪效果。</p>
+    <p className="crop-hint">四角等比例缩放，四边只改长宽；拖动框内移动，上方圆点旋转。允许超出图片，按重叠部分裁剪。</p>
     <p className="crop-hint">{target.kind === 'asset' ? '确定后直接替换素材，已有画布副本不变。' : '确定后替换当前画布图片，保存后删除旧图片。'}裁掉的内容在提交后无法恢复。</p>
     {error && <p className="crop-error" role="alert">{error}{!source && !opening && <button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button>}</p>}
     <div className="dialog-actions"><button type="button" disabled={pending || opening} onClick={onClose}>取消</button>

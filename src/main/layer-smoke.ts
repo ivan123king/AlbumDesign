@@ -1,5 +1,6 @@
 /** 文件用途：仅用临时画册验收对象命名、图片/文字混合叠层、列表拖放、菜单边界和保存恢复。 */
 import assert from 'node:assert/strict';
+import { answerUnsaved } from './dialog-smoke-helpers';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dialog, nativeImage } from 'electron';
@@ -198,10 +199,10 @@ export async function runLayerSmoke(window: BrowserWindow, output: string, contr
     const savedOrder = await uiOrder();
     await action(horizontal, 'top');
     answer = 2;
-    const canceled = await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(albumId)},${JSON.stringify(pageId)})`);
+    const canceled = await answerUnsaved(window, () => window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(albumId)},${JSON.stringify(pageId)})`), answer === 2 ? 'cancel' : 'discard');
     assert.equal(canceled.status, 'canceled'); assert((await state()).canvas!.dirty);
     answer = 1;
-    await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(albumId)},${JSON.stringify(pageId)})`); await idle();
+    await answerUnsaved(window, () => window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(albumId)},${JSON.stringify(pageId)})`), answer === 2 ? 'cancel' : 'discard'); await idle();
     assert.deepEqual(await uiOrder(), savedOrder); assert(!(await state()).canvas!.dirty);
     await controller.loadSmokeAlbum(root); await idle(); assert.deepEqual(await uiOrder(), savedOrder);
     const currentAlbumId = (await state()).album!.id;
@@ -264,12 +265,12 @@ export async function runLayerSmoke(window: BrowserWindow, output: string, contr
     assert.equal(objectLabel((await state()).canvas!.document.objects.find(item => item.id === imageA!.id)!), '背景照片.png');
     answer = 1;
     const restoredAlbumId = (await state()).album!.id;
-    await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(restoredAlbumId)},${JSON.stringify(pageId)})`); await idle();
+    await answerUnsaved(window, () => window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(restoredAlbumId)},${JSON.stringify(pageId)})`), answer === 2 ? 'cancel' : 'discard'); await idle();
     assert.equal(objectLabel((await state()).canvas!.document.objects.find(item => item.id === imageA!.id)!), '封面主图');
     assert(!(await state()).canvas!.dirty);
     await openName(imageA!.id); await enterName('未保存的新名称');
     answer = 2;
-    const cancelNameSwitch = await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(restoredAlbumId)},${JSON.stringify(pageId)})`);
+    const cancelNameSwitch = await answerUnsaved(window, () => window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(restoredAlbumId)},${JSON.stringify(pageId)})`), answer === 2 ? 'cancel' : 'discard');
     assert.equal(cancelNameSwitch.status, 'canceled'); assert((await state()).canvas!.dirty);
     // 外部修改导致保存失败时名称草稿保留；恢复测试文件后可重试保存。
     const namedFile = await readFile(file, 'utf8'); await writeFile(file, namedFile + ' ');

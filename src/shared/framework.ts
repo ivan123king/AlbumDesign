@@ -17,14 +17,17 @@ export interface AppInfo {
 /** 主进程持有一次性请求 ID；界面只能回应当前弹窗，不能提交任意删除目标。 */
 export type AppDialogRequest =
   | { id: string; kind: 'warning'; title: string; subject: string; message: string }
+  | { id: string; kind: 'unsaved'; subject: string; exportOnly: boolean }
   | { id: string; kind: 'about' };
+export type UnsavedChoice = 'save' | 'discard' | 'cancel';
+export type AppDialogResponse = boolean | UnsavedChoice;
 export interface AppDialogState { revision: number; request: AppDialogRequest | null }
 
 /** 只提供明确业务方法，不暴露通用 IPC 或文件系统能力。 */
 export interface DesktopApi extends AlbumApi {
   getAppInfo(): Promise<AppInfo>;
   getAppDialog(): Promise<AppDialogState>;
-  respondAppDialog(id: string, confirmed: boolean): Promise<boolean>;
+  respondAppDialog(id: string, response: AppDialogResponse): Promise<boolean>;
   onAppDialog(listener: (state: AppDialogState) => void): () => void;
 }
 

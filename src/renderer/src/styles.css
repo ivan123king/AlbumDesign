@@ -1,10 +1,14 @@
 /* 文件用途：定义三栏桌面框架、毫米页面排版及独立打印样式。 */
 :root { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #30332f; background: #f5f4f1; font-synthesis: none; text-rendering: optimizeLegibility; }
 /* 裁剪只在按钮触发时生成预览；操作区使用原图像素 SVG 坐标与八点控制框。 */
-.group-dialog.crop-dialog { width: min(1000px, calc(100vw - 40px)); max-width: none; max-height: calc(100vh - 32px); padding: 22px; overflow: auto; }
+.group-dialog.crop-dialog { width: min(1000px, calc(100vw - 40px)); max-width: none; max-height: calc(100vh - 32px); padding: 22px; overflow: auto; border-radius: 14px; }
 .crop-heading { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
 .crop-heading h2 { margin: 0; white-space: nowrap; }
 .crop-heading span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #77816f; font-size: 12px; }
+.crop-heading button { height: 32px; padding: 0 12px; border: 1px solid #d5ddcb; border-radius: 7px; background: #fffefa; color: #718160; font-size: 12px; }
+.crop-dialog .dialog-actions { padding-top: 16px; margin-top: 16px; border-top: 1px solid #e4e8dc; }
+.crop-dialog .dialog-actions button { height: 36px; min-width: 80px; padding: 0 18px; border: 1px solid #d5ddcb; border-radius: 7px; background: #fffefa; color: #61734f; }
+.crop-dialog .dialog-actions .primary-button { background: #657552; border-color: #657552; color: white; }
 .crop-stage { position: relative; display: flex; align-items: center; justify-content: center; height: clamp(210px, 49vh, 580px); overflow: hidden; background: repeating-conic-gradient(#e3e5df 0% 25%, #fff 0% 50%) 0 0 / 20px 20px; border: 1px solid #cbd1c5; border-radius: 6px; }
 .crop-source-loader { display: none; }
 .crop-stage svg { width: 100%; height: 100%; touch-action: none; user-select: none; }
@@ -15,12 +19,21 @@
 .crop-control { fill: white; stroke: #287a43; stroke-width: 2px; vector-effect: non-scaling-stroke; }
 .crop-nw, .crop-se { cursor: nwse-resize; } .crop-ne, .crop-sw { cursor: nesw-resize; }
 .crop-n, .crop-s { cursor: ns-resize; } .crop-e, .crop-w { cursor: ew-resize; } .crop-rotate { cursor: grab; fill: #d7edca; }
-.crop-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; padding-top: 14px; }
-.crop-dialog .crop-tools label { display: flex; flex-direction: column; gap: 5px; margin: 0; font-size: 12px; }
-.crop-dialog .crop-tools input[type=number] { width: 100px; }
-.crop-dialog .crop-tools select { min-width: 140px; }
-.crop-dialog .crop-tools .crop-inverse { flex-direction: row; align-items: center; align-self: center; }
-.crop-dialog .crop-inverse input { width: 16px; margin: 0; }
+.crop-tools { display: grid; grid-template-columns: minmax(215px, 1fr) 180px minmax(135px, .8fr) auto; align-items: center; gap: 20px; margin: 16px 0 12px; padding: 14px 16px; border: 1px solid #e0e5d8; border-radius: 10px; background: #f3f5ee; }
+.crop-dialog .crop-tools label { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 12px; color: #5f6c54; white-space: nowrap; }
+.crop-dialog .crop-field > span:first-child { flex-shrink: 0; }
+.crop-dialog .crop-tools select { width: 140px; min-width: 0; height: 36px; border: 1px solid #d3dcc8; border-radius: 7px; padding: 0 30px 0 12px; font: inherit; color: #37482e; background: #fffefa; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='m2 2 4 4 4-4' fill='none' stroke='%23748267' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 11px center; }
+.crop-angle-input { position: relative; display: inline-flex; }
+.crop-dialog .crop-tools input[type=number] { width: 100px; height: 36px; border: 1px solid #d3dcc8; border-radius: 7px; padding: 0 26px 0 12px; color: #37482e; background: #fffefa; appearance: textfield; }
+.crop-angle-input input::-webkit-inner-spin-button { appearance: none; }
+.crop-angle-input > span { position: absolute; top: 50%; right: 12px; transform: translateY(-50%); color: #89957c; pointer-events: none; }
+.crop-dialog .crop-tools .crop-inverse { min-height: 36px; padding-left: 18px; border-left: 1px solid #dce3d3; cursor: pointer; }
+.crop-dialog .crop-inverse input { width: 17px; height: 17px; margin: 0; accent-color: #657552; cursor: pointer; }
+.crop-reset { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 13px; border: 1px solid #d3dcc8; border-radius: 7px; background: #fffefa; font-size: 12px; color: #61744f; }
+.crop-reset span { font-size: 19px; line-height: 1; }
+.crop-tools select:focus-visible, .crop-tools input:focus-visible { outline: 2px solid #98aa84; outline-offset: 2px; }
+.crop-tools select:disabled, .crop-tools input:disabled, .crop-reset:disabled { opacity: .55; cursor: default; }
+@media (max-width: 800px) { .crop-tools { grid-template-columns: 1fr 1fr; gap: 12px 20px; } .crop-dialog .crop-tools .crop-inverse { padding-left: 0; border-left: 0; } .crop-reset { justify-self: end; } }
 .crop-dialog .crop-hint { margin: 8px 0; font-size: 11px; line-height: 1.6; }
 .crop-error { color: #a33f2c; font-size: 12px; }
 .crop-status { position: absolute; inset: 0; display: grid; place-content: center; background: #ffffffb8; font-size: 13px; }
@@ -231,6 +244,11 @@ button:not(:disabled):hover { filter: brightness(.97); }
 .app-dialog-warning .app-dialog-confirm:focus-visible { outline-color: #c89b60; }
 .app-dialog button:disabled { opacity: .65; }
 .app-dialog-error { color: #9c513b; font-size: 12px; padding: 0 32px; }
+/* 未保存提示复用软件弹框，以绿色保存为主操作，放弃与取消明确分开。 */
+.app-save-icon { color: #657b4f; background: #eaf0e1; }
+.app-unsaved-note { margin: 0; font-size: 12px; line-height: 1.8; color: #96815e; }
+.app-dialog-actions .app-dialog-discard { margin-right: auto; padding-left: 0; padding-right: 0; min-width: auto; border-color: transparent; background: transparent; color: #8c7150; }
+.app-dialog-discard:hover { color: #a35e30; text-decoration: underline; }
 .app-about-brand { display: flex; align-items: center; gap: 16px; padding: 9px 0 26px; border-bottom: 1px solid #e7ebdf; }
 .app-about-mark { display: grid; place-items: center; width: 62px; height: 66px; flex-shrink: 0; color: #fff; background: #657552; border-radius: 9px 20px 9px 9px; font: 35px 'SimSun', serif; }
 .app-about-brand h2 { font-size: 24px; letter-spacing: 3px; }

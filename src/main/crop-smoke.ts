@@ -13,6 +13,8 @@ import type { AlbumController } from './album-ipc';
 import type { CropSettings } from '../shared/crop';
 import { cropPixelBounds } from '../shared/crop';
 import type { ImageObject } from '../shared/canvas';
+import { answerUnsaved } from './dialog-smoke-helpers';
+import type { AlbumState } from '../shared/album';
 
 /** 等待具体 DOM 条件；仅用于开发验收，不以固定延时推断成功。 */
 async function waitFor(window: BrowserWindow, expression: string): Promise<void> {
@@ -105,6 +107,33 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     await assert.rejects(task.crop(source, 'jpeg', { ...settings, width: NaN }));
     await assert.rejects(task.crop(source, 'jpeg', { ...settings, width: 1, height: 1, inverse: true }), /没有可见/u);
 
+    // 四边越界只保留实际相交像素，不扩大输出；负中心及超过原图的控制框均有效。
+    for (const [change, bounds] of [
+      [{ cx: -.1 }, { x: 0, y: 30, width: 24, height: 60 }],
+      [{ cx: 1.1 }, { x: 136, y: 30, width: 24, height: 60 }],
+      [{ cy: -.1 }, { x: 40, y: 0, width: 80, height: 18 }],
+      [{ cy: 1.1 }, { x: 40, y: 102, width: 80, height: 18 }]
+    ] as const) {
+      const cropped = await task.crop(source, 'jpeg', { ...settings, ...change });
+      assert.deepEqual(cropped.bounds, bounds);
+      assert.deepEqual(nativeImage.createFromBuffer(cropped.png).getSize(), { width: bounds.width, height: bounds.height });
+    }
+    const oversized = await task.crop(source, 'jpeg', { ...settings, width: 2, height: 2, angle: 45 });
+    assert.deepEqual(oversized.bounds, { x: 0, y: 0, width: 160, height: 120 });
+    assert.equal(alpha(oversized.png, 0, 0), 255); assert.equal(alpha(oversized.png, 159, 119), 255);
+    const edgeInverse = await task.crop(source, 'jpeg', { ...settings, cx: -.1, inverse: true });
+    assert.equal(alpha(edgeInverse.png, 0, 60), 0); assert.equal(alpha(edgeInverse.png, 25, 60), 255);
+    assert.deepEqual(edgeInverse.bounds, { x: 0, y: 0, width: 160, height: 120 });
+    const cornerRotated = await task.crop(source, 'jpeg', { ...settings, cx: 0, cy: 0, width: 1.25, angle: 30 });
+    assert.equal(cornerRotated.bounds.x, 0); assert.equal(cornerRotated.bounds.y, 0);
+    assert.equal(alpha(cornerRotated.png, 0, 0), 255);
+    await assert.rejects(task.crop(source, 'jpeg', { ...settings, cx: 2 }), /没有重叠/u);
+    // 椭圆外接框与图片有交集，但实际椭圆没有交集时，也必须拒绝透明结果。
+    await assert.rejects(task.crop(source, 'jpeg', { ...settings, shape: 'ellipse', cx: -.2, cy: -.2 }), /没有可见/u);
+    const outsideInverse = await task.crop(source, 'jpeg', { ...settings, cx: 2, inverse: true });
+    assert.deepEqual(outsideInverse.bounds, { x: 0, y: 0, width: 160, height: 120 });
+    assert.equal(alpha(outsideInverse.png, 0, 0), 255); assert.equal(alpha(outsideInverse.png, 80, 60), 255);
+
     await pages.create(album.id, '裁剪画布', 'portrait');
     const pageId = pages.snapshot()!.pageId;
     await pages.addImage(album.id, pageId, '照片.jpg');
@@ -190,7 +219,18 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     const live = await controller.loadSmokeAlbum(root);
     await waitFor(window, "document.querySelector('[data-asset-file=\"界面测试.png\"]')");
     await openCrop(window, '[data-asset-file="界面测试.png"]', '[data-crop-asset]');
+    const toolbarAligned = (): Promise<boolean> => window.webContents.executeJavaScript(`(() => {
+      const boxes = ['.crop-tools select','.crop-angle-input','.crop-inverse','.crop-reset'].map(selector => document.querySelector(selector).getBoundingClientRect());
+      return boxes.every(box => Math.abs(box.y + box.height / 2 - (boxes[0].y + boxes[0].height / 2)) < 1)
+        && boxes.every(box => box.height === 36) && document.querySelector('.crop-tools').scrollWidth <= document.querySelector('.crop-tools').clientWidth;
+    })()`);
+    assert(await toolbarAligned());
     await capture(window, join(temporary, '素材裁剪原图.png'));
+    window.setSize(1000, 680);
+    await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    assert(await toolbarAligned());
+    await capture(window, join(temporary, '裁剪紧凑工具栏.png'));
+    window.setSize(1440, 960);
     const beforeCancel = await readFile(join(root, 'assets', '界面测试.png'));
     await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"裁剪形状\"]').value='ellipse';document.querySelector('[aria-label=\"裁剪形状\"]').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('.crop-inverse input').click()");
     await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('[data-image-crop] button')).find(b=>b.textContent==='预览').click()");
@@ -224,11 +264,36 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     await dragHandle(window, 'e', 20, 0);
     const edgeFrame = await frame(); assert(edgeFrame.width > cornerFrame.width); assert.equal(edgeFrame.height, cornerFrame.height);
     await dragHandle(window, 'e', 300, 0);
-    const boundaryFrame = await frame(); assert.equal(boundaryFrame.height, edgeFrame.height);
-    assert(boundaryFrame.width >= edgeFrame.width);
+    const oversizedFrame = await frame(); assert.equal(oversizedFrame.height, edgeFrame.height);
+    const naturalWidth = await window.webContents.executeJavaScript("document.querySelector('.crop-source-loader').naturalWidth");
+    assert(oversizedFrame.width > naturalWidth);
+    const center = (): Promise<string> => window.webContents.executeJavaScript("document.querySelector('.crop-frame').parentElement.getAttribute('transform').split(' rotate')[0]");
+    const beforeRotateCenter = await center();
     await dragHandle(window, 'rotate', 40, 20);
     assert.notEqual(await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"裁剪旋转角度\"]').value"), '0');
+    assert.deepEqual(await frame(), oversizedFrame); assert.equal(await center(), beforeRotateCenter);
+    // 输入角度与鼠标旋转都只能改变角度，碰到图片边缘不缩小、不平移。
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('[aria-label="裁剪旋转角度"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'45');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+    })()`);
+    assert.deepEqual(await frame(), oversizedFrame); assert.equal(await center(), beforeRotateCenter);
     assert.equal(await window.webContents.executeJavaScript("document.querySelector('.crop-result')"), null);
+    await window.webContents.executeJavaScript("document.querySelector('.crop-reset').click()");
+    const beforeMove = await frame();
+    await dragHandle(window, 'move', -350, 0);
+    assert.deepEqual(await frame(), beforeMove);
+    const movedCenter = await center();
+    assert(Number(movedCenter.match(/translate\(([-\d.]+)/u)![1]) < 0);
+    await capture(window, join(temporary, '裁剪框自由越界.png'));
+    // 返回初始框后将其移到完全无交集的位置，预览明确提示，不替换当前页图片。
+    await dragHandle(window, 'move', -450, 0);
+    const beforeEmptyPreview = (await window.webContents.executeJavaScript('window.desktop.getAlbumState()')).canvas;
+    await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('[data-image-crop] button')).find(b=>b.textContent==='预览').click()");
+    await waitFor(window, "document.querySelector('.crop-error')?.textContent.includes('没有重叠')");
+    assert.deepEqual((await window.webContents.executeJavaScript('window.desktop.getAlbumState()')).canvas, beforeEmptyPreview);
+    await window.webContents.executeJavaScript("document.querySelector('.crop-reset').click()");
     await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"裁剪形状\"]').value='heart';document.querySelector('[aria-label=\"裁剪形状\"]').dispatchEvent(new Event('change',{bubbles:true}))");
     await capture(window, join(temporary, '画布裁剪编辑.png'));
     await window.webContents.executeJavaScript("document.querySelector('[data-image-crop] .primary-button').click()");
@@ -250,8 +315,64 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     assert(Math.abs(paper.width * 25.4 / 72 - 210) < .01); assert(Math.abs(paper.height * 25.4 / 72 - 297) < .01);
     assert(pdf.context.enumerateIndirectObjects().some(([, object]) => object instanceof PDFRawStream
       && object.dict.get(PDFName.of('Subtype')) === PDFName.of('Image') && object.dict.has(PDFName.of('SMask'))));
+    // 未保存确认沿用真实主进程锁；三种选择及重载取消不能误提交草稿。
+    const state = (): Promise<AlbumState> => window.webContents.executeJavaScript('window.desktop.getAlbumState()');
+    const baseline = (await state()).canvas!.document;
+    const dirty = async (): Promise<void> => {
+      assert.equal((await window.webContents.executeJavaScript(`window.desktop.rotatePageObject(${JSON.stringify(live.id)},${JSON.stringify(pageId)},${JSON.stringify(objectId)},71)`)).status, 'success');
+      assert((await state()).canvas!.dirty);
+    };
+    await dirty();
+    const closeCanceled = controller.canClose();
+    await waitFor(window, "document.querySelector('[data-app-dialog=unsaved][open]')");
+    assert.equal(await window.webContents.executeJavaScript("document.activeElement.hasAttribute('data-app-dialog-confirm')"), true);
+    const unsavedId = (await window.webContents.executeJavaScript('window.desktop.getAppDialog()')).request.id;
+    assert.equal(await window.webContents.executeJavaScript(`window.desktop.respondAppDialog(${JSON.stringify(unsavedId)},true)`), false);
+    await capture(window, join(temporary, '未保存确认.png'));
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    assert.equal(await closeCanceled, false); assert((await state()).canvas!.dirty);
+    assert.equal(await window.webContents.executeJavaScript(`window.desktop.respondAppDialog(${JSON.stringify(unsavedId)},'discard')`), false);
+    const closeButton = controller.canClose();
+    await waitFor(window, "document.querySelector('[data-app-dialog=unsaved][open]')");
+    await window.webContents.executeJavaScript("document.querySelector('.app-dialog-close').click()");
+    assert.equal(await closeButton, false); assert((await state()).canvas!.dirty);
+    assert.equal(await answerUnsaved(window, () => controller.canClose(), 'discard'), true);
+    assert.deepEqual((await state()).canvas!.document, baseline);
+    await dirty();
+    const pendingReload = controller.canClose();
+    await waitFor(window, "document.querySelector('[data-app-dialog=unsaved][open]')");
+    window.webContents.reload();
+    assert.equal(await pendingReload, false);
+    await waitFor(window, "document.querySelector('[data-app-ready]') && !document.querySelector('[data-app-dialog]')");
+    assert((await state()).canvas!.dirty);
+    const previousMessage = dialog.showMessageBox;
+    const nativePrompts: string[] = [];
+    try {
+      dialog.showMessageBox = (async (...args: unknown[]) => {
+        nativePrompts.push((args[args.length - 1] as { type: string }).type);
+        return { response: 0, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
+      const official = await readFile(jsonPath, 'utf8'); await writeFile(jsonPath, official + ' ');
+      assert.equal(await answerUnsaved(window, () => controller.canClose(), 'save'), false);
+      assert((await state()).canvas!.dirty); assert.equal(await readFile(jsonPath, 'utf8'), official + ' ');
+      await writeFile(jsonPath, official);
+      assert.equal(await answerUnsaved(window, () => controller.canClose(), 'save'), true);
+      assert(!(await state()).canvas!.dirty);
+      assert(nativePrompts.every(type => type === 'error'));
+    } finally { dialog.showMessageBox = previousMessage; }
+    // 导出只允许保存与取消，不能通过伪造“放弃”绕过保存规则。
+    await window.webContents.executeJavaScript(`window.desktop.rotatePageObject(${JSON.stringify(live.id)},${JSON.stringify(pageId)},${JSON.stringify(objectId)},72)`);
+    const exportCanceled = controller.exportPdf();
+    await waitFor(window, "document.querySelector('[data-app-dialog=unsaved][open]')");
+    assert.equal(await window.webContents.executeJavaScript("document.querySelector('[data-app-dialog-discard]')"), null);
+    const exportId = (await window.webContents.executeJavaScript('window.desktop.getAppDialog()')).request.id;
+    assert.equal(await window.webContents.executeJavaScript(`window.desktop.respondAppDialog(${JSON.stringify(exportId)},'discard')`), false);
+    await capture(window, join(temporary, '保存并导出确认.png'));
+    await window.webContents.executeJavaScript("document.querySelector('[data-app-dialog-cancel]').click()");
+    assert.equal((await exportCanceled).status, 'canceled'); assert((await state()).canvas!.dirty);
+    await answerUnsaved(window, () => controller.canClose(), 'discard');
     assert.deepEqual(cropPixelBounds(settings, 160, 120), rectangle.bounds);
-    const report = { elapsedMs: Math.round(performance.now() - started), checks: ['矩形/椭圆/心形/旋转/反向透明像素', '二次裁剪与透明度保留', '保存重开/旧图清理/编号不复用', '放弃/保存失败/素材同名冲突/外部修改/路径安全', '左右真实菜单/按钮预览/取消/确认/手动保存', '真实鼠标四角等比/边中点单轴/旋转', '正式PDF竖向A4与透明蒙版'], directory: temporary };
+    const report = { elapsedMs: Math.round(performance.now() - started), checks: ['矩形/椭圆/心形/旋转/反向透明像素', '四边/旋转/超大控制框越界交集与原图输出范围', '无交集/实际形状全透明拒绝/反向无交集保留原图', '旋转只改角度/自由移动/单轴越界缩放/空结果预览不改草稿', '二次裁剪与透明度保留', '保存重开/旧图清理/编号不复用', '放弃/保存失败/素材同名冲突/外部修改/路径安全', '左右真实菜单/按钮预览/取消/确认/手动保存', '真实鼠标四角等比/边中点单轴/旋转', '正式PDF竖向A4与透明蒙版', '裁剪工具栏常规/最小窗口水平对齐', '自定义保存/放弃/取消/Esc/关闭/重载/无效响应/保存失败重试/导出取消'], directory: temporary };
     await writeFile(join(temporary, 'report.json'), JSON.stringify(report, null, 2)); console.log('裁剪验收通过', report);
   } finally { task.dispose(); await cropper.release(); }
 }

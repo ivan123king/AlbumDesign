@@ -1,5 +1,6 @@
 /** 文件用途：在临时画册中验收页面编号、文件回滚、真实拖放与横竖视角下的移动。 */
 import assert from 'node:assert/strict';
+import { answerUnsaved } from './dialog-smoke-helpers';
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dialog, nativeImage, net } from 'electron';
@@ -182,9 +183,9 @@ export async function runPageSmoke(window: BrowserWindow, output: string, contro
       assert.equal(moved.widthMm, originalObject.widthMm); assert.equal(moved.rotation, originalObject.rotation);
       if (orientation === 'portrait') {
         response = 2;
-        const canceled = await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(loaded.id)}, ${JSON.stringify(loaded.pages[0]!.id)})`);
+        const canceled = await answerUnsaved(window, () => window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(loaded.id)}, ${JSON.stringify(loaded.pages[0]!.id)})`), 'cancel');
         assert.equal(canceled.status, 'canceled'); assert((await state()).canvas!.dirty);
-        assert.equal(await controller.canClose(), false);
+        assert.equal(await answerUnsaved(window, () => controller.canClose(), 'cancel'), false);
       }
       await window.webContents.executeJavaScript('window.desktop.savePage()');
     }
@@ -195,7 +196,7 @@ export async function runPageSmoke(window: BrowserWindow, output: string, contro
     assert.deepEqual((await state()).canvas!.document, saved);
     await window.webContents.executeJavaScript(`window.desktop.movePageImage(${JSON.stringify(loaded.id)}, ${JSON.stringify(pageId)}, ${JSON.stringify(objectId)}, 18, 22)`);
     response = 1;
-    await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(loaded.id)}, ${JSON.stringify(other)})`);
+    await answerUnsaved(window, () => window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(loaded.id)}, ${JSON.stringify(other)})`), 'discard');
     await window.webContents.executeJavaScript(`window.desktop.selectPage(${JSON.stringify(loaded.id)}, ${JSON.stringify(pageId)})`);
     assert.deepEqual((await state()).canvas!.document, saved);
     assert.equal(await controller.canClose(), true);
@@ -207,7 +208,7 @@ export async function runPageSmoke(window: BrowserWindow, output: string, contro
     await window.webContents.executeJavaScript("document.querySelector('[data-fit-page]').click()");
     await capture(window, join(output, 'page-compact.png'));
     assert(await window.webContents.executeJavaScript('document.documentElement.scrollWidth <= window.innerWidth'));
-    assert(messages.some(message => message.includes('保存')));
+    assert(!messages.some(message => message.includes('是否保存当前画布')));
     // 真实 Delete 键从对象树进入删除流程，删除只影响本页副本。
     response = 1;
     await waitFor(window, "!document.querySelector('.add-page').disabled");

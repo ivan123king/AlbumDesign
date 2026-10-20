@@ -67,10 +67,10 @@ export class AlbumController {
   /** 手动保存的草稿在离页或文件结构操作前统一确认，取消保留当前界面和修改。 */
   private async guardDirty(): Promise<boolean> {
     if (!this.pages.dirty) return true;
-    const answer = await dialog.showMessageBox(this.getWindow(), { type: 'question', title: '画布有未保存修改',
-      message: '是否保存当前画布的修改（对象名称、图片、文字、图层与方向）？', buttons: ['保存', '放弃修改', '取消'], defaultId: 0, cancelId: 2 });
-    if (answer.response === 2) return false;
-    if (answer.response === 0) await this.pages.save(); else await this.pages.discard();
+    const subject = this.state.album?.pages.find(page => page.id === this.state.canvas?.pageId)?.name ?? '当前画布';
+    const answer = await this.dialogs.confirmUnsaved(subject);
+    if (answer === 'cancel') return false;
+    if (answer === 'save') await this.pages.save(); else await this.pages.discard();
     return true;
   }
 
@@ -363,9 +363,9 @@ export class AlbumController {
       if (!this.pdfWindows) throw new Error('PDF 导出窗口尚未初始化。');
       const name = pdfFileName(album.name);
       if (this.pages.dirty) {
-        const answer = await dialog.showMessageBox(this.getWindow(), { type: 'question', title: '保存并导出 PDF',
-          message: '当前画布有未保存修改，保存后导出整本画册？', buttons: ['保存并导出', '取消'], defaultId: 0, cancelId: 1 });
-        if (answer.response !== 0) return undefined;
+        const subject = album.pages.find(page => page.id === this.state.canvas?.pageId)?.name ?? '当前画布';
+        const answer = await this.dialogs.confirmUnsaved(subject, true);
+        if (answer !== 'save') return undefined;
         await this.pages.save();
       }
       const selected = await dialog.showSaveDialog(this.getWindow(), { title: '导出画册 PDF', defaultPath: name,

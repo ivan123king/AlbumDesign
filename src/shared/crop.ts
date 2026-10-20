@@ -1,6 +1,6 @@
 /** 文件用途：定义图片裁剪契约、统一形状路径及预览/后台成品共用的像素绘制规则。 */
 export type CropShape = 'rectangle' | 'ellipse' | 'heart';
-/** 中心和长宽相对原图归一化；角度按原图像素坐标旋转，与画布对象角度无关。 */
+/** 中心和长宽以原图为比例基准，允许中心越界及宽高超过 1；角度与画布对象角度无关。 */
 export interface CropSettings { shape: CropShape; cx: number; cy: number; width: number; height: number; angle: number; inverse: boolean }
 export type CropTarget = { kind: 'asset'; albumId: string; path: string }
   | { kind: 'page'; albumId: string; pageId: string; objectId: string };
@@ -18,21 +18,25 @@ export function cropShapePath(shape: CropShape): string {
 export function validateCrop(crop: CropSettings): void {
   if (!crop || !['rectangle', 'ellipse', 'heart'].includes(crop.shape) || typeof crop.inverse !== 'boolean'
     || ![crop.cx, crop.cy, crop.width, crop.height, crop.angle].every(Number.isFinite)
-    || crop.cx < 0 || crop.cx > 1 || crop.cy < 0 || crop.cy > 1 || crop.width <= 0 || crop.width > 1
-    || crop.height <= 0 || crop.height > 1 || Math.abs(crop.angle) > 360000) throw new Error('裁剪形状或范围无效。');
+    || crop.width <= 0 || crop.height <= 0 || Math.abs(crop.angle) > 360000) throw new Error('裁剪形状或范围无效。');
 }
 
-/** 普通裁剪收紧到旋转控制框的像素外接范围，反向裁剪保留原图边界。 */
+/** 普通裁剪取旋转框外接范围与原图的交集；无交集拒绝生成，反向始终保持原图边界。 */
 export function cropPixelBounds(crop: CropSettings, width: number, height: number): CropBounds {
   validateCrop(crop);
-  if (crop.inverse) return { x: 0, y: 0, width, height };
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) throw new Error('图片像素尺寸无效。');
   const angle = crop.angle * Math.PI / 180;
   const w = Math.abs(Math.cos(angle)) * crop.width * width + Math.abs(Math.sin(angle)) * crop.height * height;
   const h = Math.abs(Math.sin(angle)) * crop.width * width + Math.abs(Math.cos(angle)) * crop.height * height;
-  const x = Math.max(0, Math.floor(crop.cx * width - w / 2));
-  const y = Math.max(0, Math.floor(crop.cy * height - h / 2));
-  return { x, y, width: Math.max(1, Math.min(width, Math.ceil(crop.cx * width + w / 2)) - x),
-    height: Math.max(1, Math.min(height, Math.ceil(crop.cy * height + h / 2)) - y) };
+  const cx = crop.cx * width, cy = crop.cy * height;
+  if (![cx, cy, w, h, cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2].every(Number.isFinite)) throw new Error('裁剪坐标超出有效数值范围。');
+  if (crop.inverse) return { x: 0, y: 0, width, height };
+  const x = Math.max(0, Math.min(width, Math.floor(cx - w / 2)));
+  const y = Math.max(0, Math.min(height, Math.floor(cy - h / 2)));
+  const right = Math.max(0, Math.min(width, Math.ceil(cx + w / 2)));
+  const bottom = Math.max(0, Math.min(height, Math.ceil(cy + h / 2)));
+  if (right <= x || bottom <= y) throw new Error('裁剪范围与图片没有重叠，请调整裁剪框。');
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 /** 无外部依赖，便于在沙箱后台执行同一绘制函数；透明像素保留，失败不修改源文件。 */
@@ -58,5 +62,12 @@ export function renderCrop(image: CanvasImageSource, width: number, height: numb
   maskContext.fill(new Path2D(path));
   context.setTransform(1, 0, 0, 1, 0, 0); context.drawImage(mask, 0, 0);
   mask.width = 0; mask.height = 0;
+  // 外接框有交集也可能没有可见像素；预览与成品均拒绝全透明结果，逐行读取限制额外内存。
+  let visible = false;
+  for (let y = 0; y < canvas.height && !visible; y++) {
+    const row = context.getImageData(0, y, canvas.width, 1).data;
+    for (let i = 3; i < row.length; i += 4) if (row[i]) { visible = true; break; }
+  }
+  if (!visible) { canvas.width = 0; canvas.height = 0; throw new Error('裁剪后没有可见图片，请调整范围或反向裁剪设置。'); }
   return canvas;
 }

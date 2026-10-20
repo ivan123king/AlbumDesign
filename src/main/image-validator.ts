@@ -128,14 +128,6 @@ export class ImageValidationTask {
             const bounds = (${cropPixelBounds.toString()})(settings, result.width, result.height);
             const output = (${renderCrop.toString()})(bitmap, result.width, result.height, settings, bounds, ${JSON.stringify(crop ? cropShapePath(crop.shape) : '')}, Infinity);
             try {
-              const context = output.getContext('2d');
-              let visible = false;
-              // 逐行检查透明度，避免为完整像素副本额外分配一整张原图内存。
-              for (let y = 0; y < output.height && !visible; y++) {
-                const row = context.getImageData(0, y, output.width, 1).data;
-                for (let i = 3; i < row.length; i += 4) if (row[i]) { visible = true; break; }
-              }
-              if (!visible) throw new Error('裁剪后没有可见图片，请调整范围或反向裁剪设置。');
               const blob = await new Promise(resolve => output.toBlob(resolve, 'image/png'));
               if (!blob) throw new Error('PNG 编码失败。');
               result.thumbnail = await new Promise((resolve, reject) => {

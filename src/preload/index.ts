@@ -12,7 +12,7 @@ const desktopApi: DesktopApi = {
   cancelPdfExport: () => ipcRenderer.invoke('album:cancel-pdf'),
   getPdfPrintPage: () => ipcRenderer.invoke('album:print-page'),
   getAppDialog: () => ipcRenderer.invoke('app:get-dialog'),
-  respondAppDialog: (id, confirmed) => ipcRenderer.invoke('app:respond-dialog', id, confirmed),
+  respondAppDialog: (id, response) => ipcRenderer.invoke('app:respond-dialog', id, response),
   /** 不向界面传递 Electron 事件对象，取消订阅时移除相同函数。 */
   onAppDialog: listener => {
     const handler = (_event: Electron.IpcRendererEvent, state: AppDialogState): void => listener(state);
