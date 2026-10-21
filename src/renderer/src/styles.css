@@ -33,6 +33,21 @@
 .crop-reset span { font-size: 19px; line-height: 1; }
 .crop-tools select:focus-visible, .crop-tools input:focus-visible { outline: 2px solid #98aa84; outline-offset: 2px; }
 .crop-tools select:disabled, .crop-tools input:disabled, .crop-reset:disabled { opacity: .55; cursor: default; }
+/* 圆角滑块隐藏单位与数值；独立模式按图片四角位置排列，沿用现有重置。 */
+.crop-corners { display: flex; align-items: center; gap: 24px; margin: 0 0 12px; padding: 12px 16px; border: 1px solid #e0e5d8; border-radius: 10px; background: #f3f5ee; font-size: 12px; color: #5f6c54; }
+.crop-corners-heading { display: flex; align-items: center; gap: 20px; flex-shrink: 0; }
+.crop-dialog .crop-corner-sync { display: flex; align-items: center; gap: 7px; margin: 0; white-space: nowrap; cursor: pointer; }
+.crop-corner-sync input { width: 17px; height: 17px; margin: 0; accent-color: #657552; }
+.crop-corner-sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; flex: 1; min-width: 0; }
+.crop-corner-sliders.is-linked { grid-template-columns: 1fr; }
+.crop-dialog .crop-corner-slider { display: flex; align-items: center; gap: 8px; margin: 0; white-space: nowrap; font-size: 11px; }
+.crop-corner-name { color: #37482e; font-weight: 600; }
+/* 排除普通输入框的内边距与边框，让原生轨道的两端与滑块实际端点一致。 */
+.crop-corner-slider input[type="range"] { width: 100%; min-width: 40px; height: 24px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; accent-color: #657552; cursor: pointer; }
+.crop-corners input:focus-visible { outline: 2px solid #98aa84; outline-offset: 2px; }
+.crop-corners input:disabled { opacity: .55; cursor: default; }
+/* 小窗口为圆角设置与确认按钮留出空间，图片仍完整适应预览区。 */
+.crop-dialog:has(.crop-corners) .crop-stage { height: clamp(140px, min(49vh, calc(100vh - 470px)), 580px); }
 @media (max-width: 800px) { .crop-tools { grid-template-columns: 1fr 1fr; gap: 12px 20px; } .crop-dialog .crop-tools .crop-inverse { padding-left: 0; border-left: 0; } .crop-reset { justify-self: end; } }
 .crop-dialog .crop-hint { margin: 8px 0; font-size: 11px; line-height: 1.6; }
 .crop-error { color: #a33f2c; font-size: 12px; }

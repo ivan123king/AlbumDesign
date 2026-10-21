@@ -1,17 +1,29 @@
 /** 文件用途：定义图片裁剪契约、统一形状路径及预览/后台成品共用的像素绘制规则。 */
 export type CropShape = 'rectangle' | 'ellipse' | 'heart';
+/** 左上、右上、右下、左下的圆角程度，0 为直角，1 为控制框短边一半的半径。 */
+export type CropCornerRadii = [number, number, number, number];
 /** 中心和长宽以原图为比例基准，允许中心越界及宽高超过 1；角度与画布对象角度无关。 */
-export interface CropSettings { shape: CropShape; cx: number; cy: number; width: number; height: number; angle: number; inverse: boolean }
+export interface CropSettings {
+  shape: CropShape; cx: number; cy: number; width: number; height: number; angle: number; inverse: boolean;
+  cornerRadii?: CropCornerRadii;
+}
 export type CropTarget = { kind: 'asset'; albumId: string; path: string }
   | { kind: 'page'; albumId: string; pageId: string; objectId: string };
 export interface CropSource { token: string; url: string; width: number; height: number }
 export interface CropBounds { x: number; y: number; width: number; height: number }
 
-/** 路径均占据 0～1 的控制框；心形允许边中点拉伸，八点规则对所有形状一致。 */
-export function cropShapePath(shape: CropShape): string {
+/** 返回 0～1 控制框内的路径；按实际像素长宽换算圆弧，拉伸矩形后仍为圆角而非椭圆角。省略圆角时保持直角。 */
+export function cropShapePath(shape: CropShape, width = 1, height = 1, cornerRadii?: CropCornerRadii): string {
   if (shape === 'ellipse') return 'M 1 .5 A .5 .5 0 1 0 0 .5 A .5 .5 0 1 0 1 .5 Z';
   if (shape === 'heart') return 'M .5 1 C .42 .88 0 .60 0 .27 C 0 -.02 .34 -.09 .5 .16 C .66 -.09 1 -.02 1 .27 C 1 .60 .58 .88 .5 1 Z';
-  return 'M 0 0 H 1 V 1 H 0 Z';
+  if (!cornerRadii?.some(value => value > 0)) return 'M 0 0 H 1 V 1 H 0 Z';
+  const halfSide = Math.min(width, height) / 2;
+  const [tl, tr, br, bl] = cornerRadii.map(value => ({ x: value * halfSide / width, y: value * halfSide / height })) as
+    [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }];
+  return `M ${tl.x} 0 H ${1 - tr.x} A ${tr.x} ${tr.y} 0 0 1 1 ${tr.y}`
+    + ` V ${1 - br.y} A ${br.x} ${br.y} 0 0 1 ${1 - br.x} 1`
+    + ` H ${bl.x} A ${bl.x} ${bl.y} 0 0 1 0 ${1 - bl.y}`
+    + ` V ${tl.y} A ${tl.x} ${tl.y} 0 0 1 ${tl.x} 0 Z`;
 }
 
 /** IPC 边界与绘制共用校验，拒绝无效数值、空裁剪框及不支持的形状。 */
@@ -19,6 +31,9 @@ export function validateCrop(crop: CropSettings): void {
   if (!crop || !['rectangle', 'ellipse', 'heart'].includes(crop.shape) || typeof crop.inverse !== 'boolean'
     || ![crop.cx, crop.cy, crop.width, crop.height, crop.angle].every(Number.isFinite)
     || crop.width <= 0 || crop.height <= 0 || Math.abs(crop.angle) > 360000) throw new Error('裁剪形状或范围无效。');
+  if (crop.cornerRadii !== undefined && (!Array.isArray(crop.cornerRadii) || crop.cornerRadii.length !== 4
+    || ![0, 1, 2, 3].every(index => Number.isFinite(crop.cornerRadii![index])
+      && crop.cornerRadii![index]! >= 0 && crop.cornerRadii![index]! <= 1))) throw new Error('裁剪圆角设置无效。');
 }
 
 /** 普通裁剪取旋转框外接范围与原图的交集；无交集拒绝生成，反向始终保持原图边界。 */

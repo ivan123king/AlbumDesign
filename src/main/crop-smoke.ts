@@ -10,7 +10,7 @@ import { PageStore } from './page-store';
 import { CropImages } from './crop-images';
 import { ImageValidationTask } from './image-validator';
 import type { AlbumController } from './album-ipc';
-import type { CropSettings } from '../shared/crop';
+import type { CropCornerRadii, CropSettings } from '../shared/crop';
 import { cropPixelBounds } from '../shared/crop';
 import type { ImageObject } from '../shared/canvas';
 import { answerUnsaved } from './dialog-smoke-helpers';
@@ -71,6 +71,20 @@ function alpha(png: Buffer, x: number, y: number): number {
   return image.toBitmap()[(y * size.width + x) * 4 + 3]!;
 }
 
+/** 在真实 range 内按下并拖到左右端点，验证鼠标可达最小/最大值，而非只验证键盘赋值。 */
+async function dragSlider(window: BrowserWindow, label: string, edge: 'left' | 'right'): Promise<void> {
+  const points = await window.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('[aria-label="${label}"]'); input.scrollIntoView({block:'nearest'});
+    const bounds = input.getBoundingClientRect();
+    return { x: Math.round(bounds.x + bounds.width / 2), y: Math.round(bounds.y + bounds.height / 2),
+      end: ${edge === 'left'} ? Math.ceil(bounds.left + 1) : Math.floor(bounds.right - 1) };
+  })()`);
+  window.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, x: points.x, y: points.y });
+  window.webContents.sendInputEvent({ type: 'mouseMove', button: 'left', x: points.end, y: points.y });
+  window.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, x: points.end, y: points.y });
+  await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(resolve))');
+}
+
 /** 覆盖原像素、事务恢复和真实界面；所有删除只作用于本次 mkdtemp 的画册。 */
 export async function runCropSmoke(window: BrowserWindow, output: string, controller: AlbumController): Promise<void> {
   const started = performance.now();
@@ -95,6 +109,28 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     assert.deepEqual(rectangle.bounds, { x: 40, y: 30, width: 80, height: 60 });
     assert.deepEqual(nativeImage.createFromBuffer(rectangle.png).getSize(), { width: 80, height: 60 });
     assert.equal(alpha(rectangle.png, 0, 0), 255);
+    // 独立读取 PNG 四角，验证顺序、最大半径和反向蒙版，不以路径字符串断言绘制结果。
+    const corners = [[0, 0], [79, 0], [79, 59], [0, 59]] as const;
+    for (let index = 0; index < 4; index++) {
+      const cornerRadii: CropCornerRadii = [0, 0, 0, 0]; cornerRadii[index] = 1;
+      const rounded = await task.crop(source, 'jpeg', { ...settings, cornerRadii });
+      assert.deepEqual(rounded.bounds, rectangle.bounds);
+      assert.deepEqual(corners.map(([x, y]) => alpha(rounded.png, x, y)), corners.map((_, at) => at === index ? 0 : 255));
+      assert.equal(alpha(rounded.png, 40, 30), 255);
+    }
+    const allRounded: CropSettings = { ...settings, cornerRadii: [1, 1, 1, 1] };
+    const rounded = await task.crop(source, 'jpeg', allRounded);
+    assert.deepEqual(corners.map(([x, y]) => alpha(rounded.png, x, y)), [0, 0, 0, 0]);
+    assert.equal(alpha(rounded.png, 40, 0), 255);
+    const roundedInverse = await task.crop(source, 'jpeg', { ...allRounded, inverse: true });
+    assert.equal(alpha(roundedInverse.png, 40, 30), 255); assert.equal(alpha(roundedInverse.png, 80, 60), 0);
+    const roundedRotated = await task.crop(source, 'jpeg', { ...allRounded, angle: 90 });
+    assert.equal(alpha(roundedRotated.png, 0, 0), 0); assert.equal(alpha(roundedRotated.png, 30, 40), 255);
+    const narrowRounded = await task.crop(source, 'jpeg', { ...allRounded, height: 1 / 6 });
+    assert.equal(alpha(narrowRounded.png, 10, 1), 255); assert.equal(alpha(narrowRounded.png, 0, 0), 0);
+    for (const cornerRadii of [[-1, 0, 0, 0], [0, 0, 0, 1.01], [NaN, 0, 0, 0], [0, 0, 0], new Array(4), null]) {
+      await assert.rejects(task.crop(source, 'jpeg', { ...settings, cornerRadii } as CropSettings), /圆角/u);
+    }
     const ellipse = await task.crop(source, 'jpeg', { ...settings, shape: 'ellipse' });
     assert.equal(alpha(ellipse.png, 0, 0), 0); assert.equal(alpha(ellipse.png, 40, 30), 255);
     const heart = await task.crop(source, 'jpeg', { ...settings, shape: 'heart' });
@@ -226,13 +262,80 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     })()`);
     assert(await toolbarAligned());
     await capture(window, join(temporary, '素材裁剪原图.png'));
+    // 使用 Chromium 键盘操作原生 range，验证用户无需输入单位也能调整、同步和独立修改。
+    const sliderValues = (): Promise<string[]> => window.webContents.executeJavaScript("Array.from(document.querySelectorAll('.crop-corners input[type=range]'),input=>input.value)");
+    const slide = async (label: string, keyCode: string): Promise<void> => {
+      await window.webContents.executeJavaScript(`document.querySelector('[aria-label="${label}"]').focus()`);
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode });
+      await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(resolve))');
+    };
+    assert.equal(await window.webContents.executeJavaScript("document.querySelector('.crop-corner-sync input').checked"), true);
+    assert.deepEqual(await sliderValues(), ['0']);
+    assert.deepEqual(await window.webContents.executeJavaScript(`(() => {
+      const style = getComputedStyle(document.querySelector('.crop-corner-slider input'));
+      return { paddingLeft: style.paddingLeft, paddingRight: style.paddingRight, border: style.borderWidth };
+    })()`), { paddingLeft: '0px', paddingRight: '0px', border: '0px' });
+    await dragSlider(window, '圆角大小', 'right'); assert.deepEqual(await sliderValues(), ['100']);
+    await capture(window, join(temporary, '圆角滑块最右端.png'));
+    await dragSlider(window, '圆角大小', 'left'); assert.deepEqual(await sliderValues(), ['0']);
+    await capture(window, join(temporary, '圆角滑块最左端.png'));
+    const straightPath = await window.webContents.executeJavaScript("document.querySelector('.crop-outline').getAttribute('d')");
+    await slide('圆角大小', 'End');
+    assert.deepEqual(await sliderValues(), ['100']);
+    assert.notEqual(await window.webContents.executeJavaScript("document.querySelector('.crop-outline').getAttribute('d')"), straightPath);
+    assert.equal(await window.webContents.executeJavaScript("document.querySelector('.crop-result')"), null);
+    await window.webContents.executeJavaScript("document.querySelector('.crop-corner-sync input').click()");
+    assert.deepEqual(await sliderValues(), ['100', '100', '100', '100']);
+    await slide('右上大小', 'Home'); await slide('左下大小', 'Home');
+    assert.deepEqual(await sliderValues(), ['100', '0', '0', '100']);
+    await capture(window, join(temporary, '独立四角圆角.png'));
     window.setSize(1000, 680);
     await window.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     assert(await toolbarAligned());
+    assert(await window.webContents.executeJavaScript(`(() => {
+      const panel = document.querySelector('.crop-corners'), sliders = [...panel.querySelectorAll('input[type=range]')];
+      const dialog = document.querySelector('[data-image-crop]'), actions = dialog.querySelector('.dialog-actions').getBoundingClientRect();
+      return panel.scrollWidth <= panel.clientWidth && sliders.every(input => input.getBoundingClientRect().width >= 40)
+        && dialog.scrollHeight <= dialog.clientHeight + 1 && actions.bottom <= dialog.getBoundingClientRect().bottom;
+    })()`));
+    // 最小窗口中逐一拖动独立四角到两端，再恢复对角圆角，防止短滑轨端点失效。
+    for (const [label, expected] of [['左上大小', 'right'], ['右上大小', 'left'], ['左下大小', 'left'], ['右下大小', 'right']] as const) {
+      for (const edge of ['left', 'right', expected] as const) {
+        await dragSlider(window, label, edge);
+        assert.equal(await window.webContents.executeJavaScript(`document.querySelector('[aria-label="${label}"]').value`), edge === 'left' ? '0' : '100');
+      }
+    }
     await capture(window, join(temporary, '裁剪紧凑工具栏.png'));
     window.setSize(1440, 960);
     const beforeCancel = await readFile(join(root, 'assets', '界面测试.png'));
+    await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('[data-image-crop] button')).find(b=>b.textContent==='预览').click()");
+    await waitFor(window, "document.querySelector('.crop-result')?.complete && !document.querySelector('.crop-status')");
+    const roundedPreview = await window.webContents.executeJavaScript(`(() => {
+      const image = document.querySelector('.crop-result'), canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+      const result = [[0,0],[canvas.width-1,0],[canvas.width-1,canvas.height-1],[0,canvas.height-1]]
+        .map(([x,y])=>context.getImageData(x,y,1,1).data[3]);
+      canvas.width=0;canvas.height=0;return result;
+    })()`);
+    assert.deepEqual(roundedPreview, [0, 255, 0, 255]);
+    assert.equal(await window.webContents.executeJavaScript("[...document.querySelectorAll('.crop-corners input')].every(input=>input.disabled)"), true);
+    await capture(window, join(temporary, '独立圆角预览.png'));
+    await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('[data-image-crop] button')).find(b=>b.textContent==='返回调整').click()");
+    assert.deepEqual(await sliderValues(), ['100', '0', '0', '100']);
+    await window.webContents.executeJavaScript("(() => { const select = document.querySelector('[aria-label=\"裁剪形状\"]');select.value='ellipse';select.dispatchEvent(new Event('change',{bubbles:true})); })()");
+    assert.equal(await window.webContents.executeJavaScript("document.querySelector('.crop-corners')"), null);
+    await window.webContents.executeJavaScript("(() => { const select = document.querySelector('[aria-label=\"裁剪形状\"]');select.value='rectangle';select.dispatchEvent(new Event('change',{bubbles:true})); })()");
+    assert.deepEqual(await sliderValues(), ['100', '0', '0', '100']);
+    await window.webContents.executeJavaScript("document.querySelector('.crop-corner-sync input').click()");
+    assert.deepEqual(await sliderValues(), ['100']);
+    await window.webContents.executeJavaScript("document.querySelector('.crop-corner-sync input').click()");
+    assert.deepEqual(await sliderValues(), ['100', '100', '100', '100']);
+    await window.webContents.executeJavaScript("document.querySelector('.crop-reset').click()");
+    assert.deepEqual(await sliderValues(), ['0']);
+    assert.equal(await window.webContents.executeJavaScript("document.querySelector('.crop-corner-sync input').checked"), true);
     await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"裁剪形状\"]').value='ellipse';document.querySelector('[aria-label=\"裁剪形状\"]').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('.crop-inverse input').click()");
+    assert.equal(await window.webContents.executeJavaScript("document.querySelector('.crop-corners')"), null);
     await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('[data-image-crop] button')).find(b=>b.textContent==='预览').click()");
     await waitFor(window, "document.querySelector('.crop-result')?.complete && !document.querySelector('.crop-status')");
     const previewAlpha = await window.webContents.executeJavaScript(`(() => {
@@ -250,9 +353,15 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     await waitFor(window, "!document.querySelector('[data-image-crop]')");
     assert.deepEqual(await readFile(join(root, 'assets', '界面测试.png')), beforeCancel);
     await openCrop(window, '[data-asset-file="界面测试.png"]', '[data-crop-asset]');
+    await slide('圆角大小', 'End');
+    await window.webContents.executeJavaScript("document.querySelector('.crop-corner-sync input').click()");
+    await slide('右上大小', 'Home'); await slide('左下大小', 'Home');
     await window.webContents.executeJavaScript("document.querySelector('[data-image-crop] .primary-button').click()");
     await waitFor(window, "!document.querySelector('[data-image-crop]')");
     assert.deepEqual(nativeImage.createFromPath(join(root, 'assets', '界面测试.png')).getSize(), { width: 128, height: 96 });
+    const roundedAsset = await readFile(join(root, 'assets', '界面测试.png'));
+    assert.deepEqual(([[0,0],[127,0],[127,95],[0,95]] as const).map(([x,y]) => alpha(roundedAsset, x, y)), roundedPreview);
+    assert.equal(alpha(roundedAsset, 64, 48), 255);
     const objectId = (await window.webContents.executeJavaScript('window.desktop.getAlbumState()')).canvas.document.objects[0].id;
     await openCrop(window, `[data-object-button="${objectId}"]`, '[data-crop-object]');
     const frame = (): Promise<{ width: number; height: number }> => window.webContents.executeJavaScript("({width:+document.querySelector('.crop-frame').getAttribute('width'),height:+document.querySelector('.crop-frame').getAttribute('height')})");
@@ -296,6 +405,9 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     await window.webContents.executeJavaScript("document.querySelector('.crop-reset').click()");
     await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"裁剪形状\"]').value='heart';document.querySelector('[aria-label=\"裁剪形状\"]').dispatchEvent(new Event('change',{bubbles:true}))");
     await capture(window, join(temporary, '画布裁剪编辑.png'));
+    await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"裁剪形状\"]').value='rectangle';document.querySelector('[aria-label=\"裁剪形状\"]').dispatchEvent(new Event('change',{bubbles:true}))");
+    await slide('圆角大小', 'End');
+    await capture(window, join(temporary, '画布圆角裁剪.png'));
     await window.webContents.executeJavaScript("document.querySelector('[data-image-crop] .primary-button').click()");
     await waitFor(window, "!document.querySelector('[data-image-crop]') && document.querySelector('.page-unsaved-marker')");
     assert.equal((await window.webContents.executeJavaScript('window.desktop.getAlbumState()')).album.id, live.id);
@@ -373,6 +485,7 @@ export async function runCropSmoke(window: BrowserWindow, output: string, contro
     await answerUnsaved(window, () => controller.canClose(), 'discard');
     assert.deepEqual(cropPixelBounds(settings, 160, 120), rectangle.bounds);
     const report = { elapsedMs: Math.round(performance.now() - started), checks: ['矩形/椭圆/心形/旋转/反向透明像素', '四边/旋转/超大控制框越界交集与原图输出范围', '无交集/实际形状全透明拒绝/反向无交集保留原图', '旋转只改角度/自由移动/单轴越界缩放/空结果预览不改草稿', '二次裁剪与透明度保留', '保存重开/旧图清理/编号不复用', '放弃/保存失败/素材同名冲突/外部修改/路径安全', '左右真实菜单/按钮预览/取消/确认/手动保存', '真实鼠标四角等比/边中点单轴/旋转', '正式PDF竖向A4与透明蒙版', '裁剪工具栏常规/最小窗口水平对齐', '自定义保存/放弃/取消/Esc/关闭/重载/无效响应/保存失败重试/导出取消'], directory: temporary };
+    report.checks.unshift('同步与独立四角真实鼠标拖到两端/无输入框内边距和边框', '圆角四角顺序/最大值/长宽拉伸/旋转/反向像素与非法参数拒绝', '同步与独立滑块/实时轮廓/返回调整/切换形状保留/重置', '圆角预览与素材成品像素/画布圆角保存及正式PDF透明输出');
     await writeFile(join(temporary, 'report.json'), JSON.stringify(report, null, 2)); console.log('裁剪验收通过', report);
   } finally { task.dispose(); await cropper.release(); }
 }

@@ -2,11 +2,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
 import { cropPixelBounds, cropShapePath, renderCrop } from '../../../shared/crop';
-import type { CropSettings, CropShape, CropSource, CropTarget } from '../../../shared/crop';
+import type { CropCornerRadii, CropSettings, CropShape, CropSource, CropTarget } from '../../../shared/crop';
 import { resizeHandles, rotateVector } from '../../../shared/canvas';
 import type { ResizeHandle } from '../../../shared/canvas';
 
-const initialCrop: CropSettings = { shape: 'rectangle', cx: .5, cy: .5, width: .8, height: .8, angle: 0, inverse: false };
+const initialCrop: CropSettings = { shape: 'rectangle', cx: .5, cy: .5, width: .8, height: .8, angle: 0, inverse: false, cornerRadii: [0, 0, 0, 0] };
+// 控件按画面位置排列；路径数据仍使用顺时针顺序，避免左右下角混淆。
+const cornerControls = [{ index: 0, label: '左上' }, { index: 1, label: '右上' }, { index: 3, label: '左下' }, { index: 2, label: '右下' }] as const;
 type Gesture = { kind: ResizeHandle | 'move' | 'rotate'; pointer: number; x: number; y: number; start: CropSettings };
 
 /** 原生模态焦点限制背景操作；关闭释放只读源图租约与本次预览，不改变任何文件。 */
@@ -20,6 +22,7 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
   const [source, setSource] = useState<CropSource | null>(null), [crop, setCrop] = useState<CropSettings>(initialCrop);
   const [loaded, setLoaded] = useState(false), [pending, setPending] = useState(false), [error, setError] = useState('');
   const [preview, setPreview] = useState(''), [opening, setOpening] = useState(true), [attempt, setAttempt] = useState(0);
+  const [cornersLinked, setCornersLinked] = useState(true);
   useEffect(() => { dialog.current?.showModal(); return () => dialog.current?.close(); }, []);
   useEffect(() => {
     let active = true;
@@ -56,6 +59,7 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
   const width = source?.width ?? 1000, height = source?.height ?? 700;
   const padding = Math.max(width, height) * .08, radius = Math.max(width, height) * .009;
   const frameWidth = crop.width * width, frameHeight = crop.height * height;
+  const shapePath = cropShapePath(crop.shape, frameWidth, frameHeight, crop.cornerRadii);
   const locked = pending || opening || !loaded;
 
   /** 屏幕鼠标先转换到 SVG 原图像素，操作不受弹框尺寸和图片查看缩放影响。 */
@@ -116,7 +120,7 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
     let canvas: HTMLCanvasElement | null = null;
     try {
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      canvas = renderCrop(image.current, width, height, crop, cropPixelBounds(crop, width, height), cropShapePath(crop.shape), 1200);
+      canvas = renderCrop(image.current, width, height, crop, cropPixelBounds(crop, width, height), shapePath, 1200);
       const blob = await new Promise<Blob | null>(resolve => canvas!.toBlob(resolve, 'image/png'));
       if (!blob) throw new Error('预览生成失败。');
       if (previewRef.current) URL.revokeObjectURL(previewRef.current);
@@ -140,6 +144,12 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
     const side = Math.min(width, height) * .7;
     setCrop({ ...crop, shape, ...(shape === 'rectangle' ? {} : { width: side / width, height: side / height }) });
   }
+  /** 滑块只调整轮廓；同步时写入四角，独立时仅改对应角，不改变裁剪框及角度。 */
+  function changeCorner(index: number, value: number): void {
+    const cornerRadii: CropCornerRadii = [...crop.cornerRadii!];
+    if (cornersLinked) cornerRadii.fill(value); else cornerRadii[index] = value;
+    setCrop({ ...crop, cornerRadii }); setError('');
+  }
   return <dialog ref={dialog} className="group-dialog crop-dialog" aria-labelledby="crop-title" data-image-crop
     onCancel={event => {
       event.preventDefault(); if (pending || opening) return;
@@ -155,7 +165,7 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
         <image href={source!.url} width={width} height={height} />
         <g transform={`translate(${crop.cx * width} ${crop.cy * height}) rotate(${crop.angle})`}>
           <rect data-crop-handle="move" x={-frameWidth / 2} y={-frameHeight / 2} width={frameWidth} height={frameHeight} className="crop-frame" />
-          <path d={cropShapePath(crop.shape)} transform={`translate(${-frameWidth / 2} ${-frameHeight / 2}) scale(${frameWidth} ${frameHeight})`}
+          <path d={shapePath} transform={`translate(${-frameWidth / 2} ${-frameHeight / 2}) scale(${frameWidth} ${frameHeight})`}
             className="crop-outline" vectorEffect="non-scaling-stroke" />
           <line x1={0} x2={0} y1={-frameHeight / 2} y2={-frameHeight / 2 - radius * 4} className="crop-line" vectorEffect="non-scaling-stroke" />
           <circle data-crop-handle="rotate" cx={0} cy={-frameHeight / 2 - radius * 4} r={radius * 1.2} className="crop-control crop-rotate" />
@@ -173,8 +183,24 @@ export function ImageCropDialog({ target, name, onClose, onApplied }: {
       <label className="crop-field"><span>旋转角度</span><span className="crop-angle-input"><input aria-label="裁剪旋转角度" type="number" value={Number(crop.angle.toFixed(1))} step="1" disabled={locked || !!preview}
         onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setCrop({ ...crop, angle: ((value % 360) + 360) % 360 }); }} /><span aria-hidden="true">°</span></span></label>
       <label className="crop-inverse" title="勾选后保留形状外部，移除形状内部"><input type="checkbox" checked={crop.inverse} disabled={locked || !!preview} onChange={event => setCrop({ ...crop, inverse: event.target.checked })} /><span>反向裁剪</span></label>
-      <button className="crop-reset" type="button" disabled={locked || !!preview} onClick={() => { setCrop(initialCrop); setError(''); }}><span aria-hidden="true">↺</span>重置</button>
+      <button className="crop-reset" type="button" disabled={locked || !!preview} onClick={() => { setCrop(initialCrop); setCornersLinked(true); setError(''); }}><span aria-hidden="true">↺</span>重置</button>
     </div>
+    {crop.shape === 'rectangle' && <div className="crop-corners" role="group" aria-label="矩形圆角">
+      <div className="crop-corners-heading"><span>圆角</span><label className="crop-corner-sync"><input type="checkbox" checked={cornersLinked}
+        disabled={locked || !!preview} onChange={event => {
+          const linked = event.target.checked; setCornersLinked(linked);
+          // 重新同步时以左上角为准统一四角，避免滑块显示与实际轮廓不一致。
+          if (linked) { const value = crop.cornerRadii![0]; setCrop({ ...crop, cornerRadii: [value, value, value, value] }); }
+        }} />四角同步</label></div>
+      <div className={`crop-corner-sliders${cornersLinked ? ' is-linked' : ''}`}>
+        {(cornersLinked ? [{ index: 0, label: '圆角' }] : cornerControls).map(({ index, label }) => <label className="crop-corner-slider" key={index}>
+          {!cornersLinked && <span className="crop-corner-name">{label}</span>}<span aria-hidden="true">直角</span>
+          <input type="range" aria-label={`${label}大小`} aria-valuetext={crop.cornerRadii![index] === 0 ? '直角' : crop.cornerRadii![index] === 1 ? '最圆' : '圆角'}
+            min="0" max="100" step="1" value={Math.round(crop.cornerRadii![index]! * 100)} disabled={locked || !!preview}
+            onChange={event => changeCorner(index, event.target.valueAsNumber / 100)} /><span aria-hidden="true">最圆</span>
+        </label>)}
+      </div>
+    </div>}
     <p className="crop-hint">四角等比例缩放，四边只改长宽；拖动框内移动，上方圆点旋转。允许超出图片，按重叠部分裁剪。</p>
     <p className="crop-hint">{target.kind === 'asset' ? '确定后直接替换素材，已有画布副本不变。' : '确定后替换当前画布图片，保存后删除旧图片。'}裁掉的内容在提交后无法恢复。</p>
     {error && <p className="crop-error" role="alert">{error}{!source && !opening && <button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button>}</p>}

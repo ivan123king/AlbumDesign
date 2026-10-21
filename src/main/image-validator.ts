@@ -126,7 +126,9 @@ export class ImageValidationTask {
             const settings = ${JSON.stringify(crop ?? null)};
             const validateCrop = ${validateCrop.toString()};
             const bounds = (${cropPixelBounds.toString()})(settings, result.width, result.height);
-            const output = (${renderCrop.toString()})(bitmap, result.width, result.height, settings, bounds, ${JSON.stringify(crop ? cropShapePath(crop.shape) : '')}, Infinity);
+            // 圆角按解码后的真实像素比例生成；与编辑轮廓和按钮预览共用路径函数。
+            const path = (${cropShapePath.toString()})(settings.shape, settings.width * result.width, settings.height * result.height, settings.cornerRadii);
+            const output = (${renderCrop.toString()})(bitmap, result.width, result.height, settings, bounds, path, Infinity);
             try {
               const blob = await new Promise(resolve => output.toBlob(resolve, 'image/png'));
               if (!blob) throw new Error('PNG 编码失败。');
